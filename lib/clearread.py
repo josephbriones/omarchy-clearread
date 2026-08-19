@@ -675,7 +675,7 @@ def _monitor_rectangle(monitor):
   x, y, width, height = values
   logical_width = int(width / scale)
   logical_height = int(height / scale)
-  if transform in (1, 3):
+  if transform in (1, 3, 5, 7):
     logical_width, logical_height = logical_height, logical_width
   if logical_width < 1 or logical_height < 1:
     return None

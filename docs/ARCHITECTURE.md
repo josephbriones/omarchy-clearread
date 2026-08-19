@@ -28,12 +28,14 @@ ClearRead.qml ── foreground Process ── bin/clearread launcher
                                                plain-text reflow reader
 ```
 
-The QML plugin owns a tiny non-exec launcher, and that launcher owns the worker.
+The QML plugin passes `Quickshell.processId` to a tiny non-exec launcher. The
+launcher verifies that exact parent before and after arming its Linux
+parent-death signal, then passes its own PID to the worker for the same check.
 On an ordinary close, the launcher forwards the stop signal and waits. If
 Quickshell destroys its `Process` with SIGKILL during disable, reload, or shell
 teardown, Linux delivers a parent-death signal to the worker instead. The
-worker verifies the launcher's expected PID before and after arming that
-boundary, then owns and reaps every capture and OCR process group.
+worker remains alive long enough to own and reap every capture and OCR process
+group.
 
 The extra process is intentional: it leaves the worker alive just long enough
 to perform bounded cleanup even when the QML-owned process is force-killed.

@@ -1,20 +1,54 @@
 #!/bin/bash
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLUGIN_ID="io.github.josephbriones.clearread"
 REAL=false
 
-if [[ ${1:-} == "--real" ]]; then
-  REAL=true
-elif [[ $# -gt 0 ]]; then
-  printf 'Usage: %s [--real]\n' "$0" >&2
-  exit 2
-fi
+usage() {
+  printf '%s\n' \
+    'Usage: bash scripts/acceptance-test.sh [--real]' \
+    '' \
+    'The default opens deterministic sample text without screen or clipboard access.' \
+    '--real interactively verifies both active-window and selected-region OCR.'
+}
 
-if ! command -v omarchy-shell >/dev/null 2>&1; then
-  printf 'FAIL: omarchy-shell is required\n' >&2
+while (( $# > 0 )); do
+  case "$1" in
+    --real)
+      REAL=true
+      ;;
+    --help | -h)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'Unknown option: %s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+bash "$ROOT/scripts/validate.sh"
+
+for command_name in omarchy omarchy-shell; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    printf 'FAIL: %s is required for desktop acceptance\n' "$command_name" >&2
+    exit 1
+  fi
+done
+
+if [[ ${XDG_SESSION_TYPE:-} != "wayland" || -z ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
+  printf '%s\n' 'FAIL: run desktop acceptance inside an active Omarchy Hyprland session' >&2
   exit 1
 fi
+
+cleanup() {
+  omarchy-shell shell hide "$PLUGIN_ID" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT INT TERM
 
 plugin_call() {
   omarchy-shell "$PLUGIN_ID" "$@"
@@ -22,7 +56,7 @@ plugin_call() {
 
 wait_for_ping() {
   local attempt
-  for ((attempt = 0; attempt < 100; attempt++)); do
+  for (( attempt = 0; attempt < 100; attempt++ )); do
     [[ $(plugin_call ping 2>/dev/null || true) == "ok" ]] && return 0
     sleep 0.1
   done
@@ -30,14 +64,14 @@ wait_for_ping() {
 }
 
 wait_for_state() {
-  local wanted=$1 attempt state
-  for ((attempt = 0; attempt < 100; attempt++)); do
+  local wanted=$1 expected_mode=${2:-} attempt state
+  for (( attempt = 0; attempt < 100; attempt++ )); do
     state=$(plugin_call state 2>/dev/null || true)
-    if python3 - "$wanted" "$state" <<'PY'
+    if python3 - "$wanted" "$expected_mode" "$state" <<'PY'
 import json
 import sys
 
-wanted, raw = sys.argv[1:]
+wanted, expected_mode, raw = sys.argv[1:]
 try:
     state = json.loads(raw)
 except (TypeError, ValueError):
@@ -52,7 +86,11 @@ if wanted == "demo-reading":
         and state.get("characters", 0) > 0
     )
 elif wanted == "closed":
-    ok = state.get("open") is False and state.get("running") is False and state.get("characters", 0) == 0
+    ok = (
+        state.get("open") is False
+        and state.get("running") is False
+        and state.get("characters", 0) == 0
+    )
 elif wanted == "ready":
     ok = (
         state.get("open") is True
@@ -60,13 +98,13 @@ elif wanted == "ready":
         and state.get("ready") is True
         and state.get("running") is False
     )
-elif wanted == "reading":
+elif wanted == "real-reading":
     ok = (
         state.get("open") is True
         and state.get("demo") is False
         and state.get("state") == "reading"
         and state.get("running") is False
-        and state.get("mode") in {"window", "region", "clipboard"}
+        and state.get("mode") == expected_mode
         and state.get("characters", 0) > 0
     )
 else:
@@ -81,30 +119,69 @@ PY
   return 1
 }
 
-printf '==> Summoning deterministic demo\n'
-omarchy-shell shell summon "$PLUGIN_ID" '{"demo":true}' >/dev/null
-wait_for_ping || { printf 'FAIL: plugin IPC did not register\n' >&2; exit 1; }
-wait_for_state demo-reading || { printf 'FAIL: demo did not reach reading state\n' >&2; exit 1; }
+summon() {
+  local payload=$1 result
+  result=$(omarchy-shell shell summon "$PLUGIN_ID" "$payload")
+  if [[ $result != "ok" ]]; then
+    printf 'FAIL: shell summon returned %s\n' "$result" >&2
+    exit 1
+  fi
+  wait_for_ping || { printf 'FAIL: plugin IPC did not register\n' >&2; exit 1; }
+}
 
-printf '==> Closing demo and checking content disposal\n'
-omarchy-shell shell hide "$PLUGIN_ID" >/dev/null
-wait_for_state closed || { printf 'FAIL: demo did not settle closed\n' >&2; exit 1; }
+close_and_verify() {
+  omarchy-shell shell hide "$PLUGIN_ID" >/dev/null
+  wait_for_state closed || {
+    printf 'FAIL: ClearRead did not close and dispose its document\n' >&2
+    exit 1
+  }
+}
 
-if [[ $REAL == false ]]; then
-  printf 'PASS: deterministic demo opened and closed without capture\n'
+printf '%s\n' '==> Summoning deterministic no-capture demo'
+summon '{"demo":true}'
+wait_for_state demo-reading || {
+  printf 'FAIL: demo did not reach a non-empty, process-free reading state\n' >&2
+  exit 1
+}
+
+printf '%s\n' '==> Closing demo and checking content disposal'
+close_and_verify
+
+if [[ $REAL == "false" ]]; then
+  printf '%s\n' 'PASS: deterministic demo opened and closed without capture'
   exit 0
 fi
 
-printf '==> Opening real readiness surface\n'
-omarchy-shell shell summon "$PLUGIN_ID" '{}' >/dev/null
-wait_for_state ready || { printf 'FAIL: readiness surface did not settle\n' >&2; exit 1; }
+if [[ ! -t 0 ]]; then
+  printf '%s\n' 'NOT PERFORMED: real capture acceptance requires an interactive terminal.' >&2
+  exit 3
+fi
 
-printf '\nUse the ClearRead UI now. Complete one capture with generated fixture text.\n'
-printf 'Confirm keyboard focus, presentation controls, and explicit Copy, then press Enter here.\n'
-read -r
+run_real_capture() {
+  local expected_mode=$1 instruction=$2
 
-wait_for_state reading || { printf 'FAIL: no non-empty reading result is open\n' >&2; exit 1; }
-omarchy-shell shell hide "$PLUGIN_ID" >/dev/null
-wait_for_state closed || { printf 'FAIL: real capture did not close and dispose content\n' >&2; exit 1; }
+  printf '\n==> Opening ClearRead for %s capture\n' "$expected_mode"
+  summon '{}'
+  wait_for_state ready || {
+    printf 'FAIL: readiness surface did not settle for %s capture\n' "$expected_mode" >&2
+    exit 1
+  }
 
-printf 'PASS: interactive capture reached reading state and closed cleanly\n'
+  printf '%s\n' "$instruction"
+  printf '%s\n' 'Use generated, non-sensitive fixture text. Return here and press Enter only after the reader appears.'
+  read -r
+
+  wait_for_state real-reading "$expected_mode" || {
+    printf 'FAIL: ClearRead did not return a non-empty %s OCR result\n' "$expected_mode" >&2
+    exit 1
+  }
+  close_and_verify
+  printf 'Verified: %s OCR returned text and closed cleanly.\n' "$expected_mode"
+}
+
+run_real_capture window \
+  'Choose “Read active window” using only the keyboard; the target window must contain the fixture text.'
+run_real_capture region \
+  'Choose “Select screen area”, select the fixture text, and confirm the ClearRead surface is absent from the captured pixels.'
+
+printf '%s\n' 'PASS: active-window and selected-region OCR both reached reading state and closed cleanly'

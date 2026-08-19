@@ -67,8 +67,58 @@ class RepositoryTests(unittest.TestCase):
         qml = (ROOT / "ClearRead.qml").read_text(encoding="utf-8")
         self.assertNotIn("Text.RichText", qml)
         self.assertNotIn("Text.AutoText", qml)
-        self.assertGreaterEqual(qml.count("Text.PlainText"), 5)
+        protected_bindings = (
+            "text: root.privacyStatus",
+            "text: root.transientMessage",
+            "text: root.setupDetails",
+            "text: root.errorMessage",
+            "text: root.documentText",
+        )
+        for binding in protected_bindings:
+            start = qml.index(binding)
+            self.assertIn("textFormat: Text.PlainText", qml[start : start + 240], binding)
         self.assertIn("keepLoaded", (ROOT / "manifest.json").read_text(encoding="utf-8"))
+
+    def test_qml_host_lifecycle_and_ipc_contract_are_explicit(self):
+        qml = (ROOT / "ClearRead.qml").read_text(encoding="utf-8")
+        self.assertIn("Item {\n  id: root", qml)
+        for host_property in ("omarchyPath", "shell", "manifest"):
+            self.assertNotRegex(qml, rf"required property\s+\w+\s+{host_property}\b")
+        self.assertIn("target: root.pluginId", qml)
+        for signature in (
+            "function open(payloadJson: string): string",
+            "function demo(): string",
+            "function close(): string",
+            "function state(): string",
+            "function ping(): string",
+        ):
+            self.assertIn(signature, qml)
+
+    def test_close_stops_every_workflow_and_discards_document_content(self):
+        qml = (ROOT / "ClearRead.qml").read_text(encoding="utf-8")
+        start = qml.index("function close()")
+        close_body = qml[start : qml.index("function dismiss()", start)]
+        for statement in (
+            'documentText = ""',
+            'copyPayload = ""',
+            "documentCharacters = 0",
+            "activeDoctorRequestId = 0",
+            "activeCaptureRequestId = 0",
+            "doctorProcess.running = false",
+            "captureProcess.running = false",
+            "copyProcess.running = false",
+        ):
+            self.assertIn(statement, close_body)
+
+    def test_qml_process_start_failures_and_stale_events_fail_closed(self):
+        qml = (ROOT / "ClearRead.qml").read_text(encoding="utf-8")
+        self.assertGreaterEqual(qml.count("onRunningChanged:"), 4)
+        self.assertEqual(qml.count("Could not start the local ClearRead helper"), 2)
+        self.assertIn("Could not start the local copy helper", qml)
+        self.assertIn("event.requestId !== activeDoctorRequestId", qml)
+        self.assertIn("event.requestId !== activeCaptureRequestId", qml)
+        self.assertIn("finishedId !== root.activeDoctorRequestId", qml)
+        self.assertIn("finishedId !== root.activeCaptureRequestId", qml)
 
     def test_qml_accessibility_controls_keep_native_focus_and_target_size(self):
         qml = (ROOT / "ClearRead.qml").read_text(encoding="utf-8")
@@ -102,6 +152,20 @@ class RepositoryTests(unittest.TestCase):
             source = script.read_text(encoding="utf-8")
             self.assertTrue(source.startswith("#!/bin/bash"), script.name)
             self.assertIsNone(re.search(r"(^|[; ])\[ ", source, re.MULTILINE), script.name)
+
+    def test_acceptance_runner_fails_closed_and_exercises_both_ocr_paths(self):
+        source = (ROOT / "scripts/acceptance-test.sh").read_text(encoding="utf-8")
+        for contract in (
+            'bash "$ROOT/scripts/validate.sh"',
+            'XDG_SESSION_TYPE:-',
+            'HYPRLAND_INSTANCE_SIGNATURE:-',
+            'trap cleanup EXIT INT TERM',
+            'if [[ ! -t 0 ]]',
+            'run_real_capture window',
+            'run_real_capture region',
+            'state.get("mode") == expected_mode',
+        ):
+            self.assertIn(contract, source)
 
 
 if __name__ == "__main__":

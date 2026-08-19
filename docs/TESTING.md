@@ -8,11 +8,12 @@ bash scripts/validate.sh
 ```
 
 The Python suite supplies fake picker, Hyprland, capture, OCR, and clipboard
-executables. It covers geometry and language validation, reflow, Unicode,
-timeouts, cancellation, output bounds, JSON protocol, copy input, child
-cleanup, and the absence of plugin-created capture artifacts. On Linux it also
-SIGKILLs the QML-facing launcher both during selection and after the frozen
-frame has been handed to `grim`, then proves the worker and owned descendants
+executables. It covers geometry and language validation, every Wayland output
+transform, reflow, Unicode, stable failure families, timeouts, cancellation,
+output bounds, JSON protocol, copy input, child cleanup, and the absence of
+plugin-created capture artifacts. On Linux it also SIGKILLs the QML-facing
+launcher during selection, after the frozen frame has been handed to `grim`,
+and during Tesseract recognition, then proves the worker and owned descendants
 exit. The Node suite covers payload, event, settings, theme, and
 presentation-state boundaries.
 
@@ -32,6 +33,10 @@ Real capture is intentionally a separate, interactive gate:
 ```bash
 bash scripts/acceptance-test.sh --real
 ```
+
+The real gate requires an interactive Omarchy Hyprland session and verifies
+active-window OCR and selected-region OCR as separate captures. It runs the
+portable suite first and closes the overlay on success, failure, or interrupt.
 
 Before release, record evidence for every unchecked item in
 [the release checklist](RELEASE_CHECKLIST.md), including:

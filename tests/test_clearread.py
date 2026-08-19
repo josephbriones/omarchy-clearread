@@ -188,12 +188,21 @@ class ClearReadTests(unittest.TestCase):
       "PYTHONDONTWRITEBYTECODE": "1",
     }
 
+  def launcher_command(self, *arguments):
+    return [
+      sys.executable,
+      str(ROOT / "bin" / "clearread"),
+      "--shell-pid",
+      str(os.getpid()),
+      *arguments,
+    ]
+
   def run_cli(self, *arguments, input_bytes=None, environment=None, timeout=5):
     command_environment = self.environment()
     if environment:
       command_environment.update(environment)
     return subprocess.run(
-      [sys.executable, str(ROOT / "bin" / "clearread"), *arguments],
+      self.launcher_command(*arguments),
       input=input_bytes,
       stdout=subprocess.PIPE,
       stderr=subprocess.PIPE,
@@ -205,6 +214,11 @@ class ClearReadTests(unittest.TestCase):
 
   def events(self, process):
     return [json.loads(line) for line in process.stdout.decode("utf-8").splitlines()]
+
+  def assert_error_code(self, expected, action):
+    with self.assertRaises(clearread.ClearReadError) as caught:
+      action()
+    self.assertEqual(caught.exception.code, expected)
 
   def test_reflow_preserves_paragraphs_lists_and_unicode(self):
     source = "Wrapped\nprose\n\n1. First\ncontinued\n2) Second\n\nمی\u200cروم क्ष\u200dत्र e\u0301"
@@ -288,6 +302,20 @@ class ClearReadTests(unittest.TestCase):
 
     self.assertEqual(clearread.monitor_for_geometry(monitors, "100,100 500x500"), "MAIN")
     self.assertEqual(clearread.monitor_for_geometry(monitors, "-1000,100 500x500"), "LEFT")
+
+  def test_monitor_rectangle_covers_every_wayland_transform(self):
+    for transform in range(8):
+      with self.subTest(transform=transform):
+        rectangle = clearread._monitor_rectangle({
+          "x": -20,
+          "y": 30,
+          "width": 1200,
+          "height": 800,
+          "scale": 2,
+          "transform": transform,
+        })
+        dimensions = (400, 600) if transform in (1, 3, 5, 7) else (600, 400)
+        self.assertEqual(rectangle, (-20, 30, *dimensions))
 
   def test_window_capture_orders_visibility_sensitive_events_and_returns_text(self):
     process = self.run_cli(
@@ -416,12 +444,11 @@ class ClearReadTests(unittest.TestCase):
     environment = self.environment()
     environment["FAKE_GRIM_STARTED"] = str(grim_started)
     process = subprocess.Popen(
-      [
-        sys.executable, str(ROOT / "bin" / "clearread"),
+      self.launcher_command(
         "capture", "--mode", "region",
         "--omarchy-path", str(self.omarchy_path),
         "--language", "eng",
-      ],
+      ),
       stdout=subprocess.PIPE,
       stderr=subprocess.PIPE,
       cwd=self.sandbox,
@@ -483,12 +510,11 @@ class ClearReadTests(unittest.TestCase):
       "FAKE_SURVIVOR": str(survivor),
     })
     launcher = subprocess.Popen(
-      [
-        sys.executable, str(ROOT / "bin" / "clearread"),
+      self.launcher_command(
         "capture", "--mode", "region",
         "--omarchy-path", str(self.omarchy_path),
         "--language", "eng",
-      ],
+      ),
       stdout=subprocess.PIPE,
       stderr=subprocess.PIPE,
       cwd=self.sandbox,
@@ -535,12 +561,11 @@ class ClearReadTests(unittest.TestCase):
       "FAKE_GRIM_STARTED": str(grim_started),
     })
     launcher = subprocess.Popen(
-      [
-        sys.executable, str(ROOT / "bin" / "clearread"),
+      self.launcher_command(
         "capture", "--mode", "region",
         "--omarchy-path", str(self.omarchy_path),
         "--language", "eng",
-      ],
+      ),
       stdout=subprocess.PIPE,
       stderr=subprocess.PIPE,
       cwd=self.sandbox,
@@ -561,6 +586,66 @@ class ClearReadTests(unittest.TestCase):
     self.assert_pid_stopped(int(worker_pid.read_text(encoding="ascii")), timeout=3)
     self.assert_pid_stopped(int(grim_pid.read_text(encoding="ascii")), timeout=3)
     self.assert_pid_stopped(int(freeze_pid_file.read_text(encoding="ascii")), timeout=3)
+
+  @unittest.skipUnless(sys.platform.startswith("linux"), "requires Linux parent-death signals")
+  def test_launcher_sigkill_reaps_tesseract_during_recognition(self):
+    worker_pid = self.sandbox / "recognition-worker-pid"
+    tesseract_pid = self.sandbox / "recognition-child-pid"
+    recognition_started = self.sandbox / "recognition-started"
+    survivor = self.sandbox / "recognition-survivor"
+    self.script(self.fake_bin / "tesseract", """
+      import os
+      from pathlib import Path
+      import signal
+      import sys
+      import time
+
+      Path(os.environ["FAKE_WORKER_PID"]).write_text(str(os.getppid()), encoding="ascii")
+      Path(os.environ["FAKE_TESSERACT_PID"]).write_text(str(os.getpid()), encoding="ascii")
+      signal.signal(signal.SIGTERM, signal.SIG_IGN)
+      sys.stdin.buffer.read()
+      Path(os.environ["FAKE_RECOGNITION_STARTED"]).write_text("started", encoding="ascii")
+      time.sleep(1)
+      Path(os.environ["FAKE_SURVIVOR"]).write_text("orphan", encoding="ascii")
+      time.sleep(10)
+    """)
+    environment = self.environment()
+    environment.update({
+      "FAKE_WORKER_PID": str(worker_pid),
+      "FAKE_TESSERACT_PID": str(tesseract_pid),
+      "FAKE_RECOGNITION_STARTED": str(recognition_started),
+      "FAKE_SURVIVOR": str(survivor),
+    })
+    launcher = subprocess.Popen(
+      self.launcher_command(
+        "capture", "--mode", "window",
+        "--omarchy-path", str(self.omarchy_path),
+        "--language", "eng",
+      ),
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+      cwd=self.sandbox,
+      env=environment,
+    )
+
+    self.assertEqual(json.loads(launcher.stdout.readline())["state"], "capturing")
+    self.assertEqual(json.loads(launcher.stdout.readline())["state"], "recognizing")
+    deadline = time.monotonic() + 2
+    while not all(path.exists() for path in (
+      worker_pid, tesseract_pid, recognition_started,
+    )) and time.monotonic() < deadline:
+      time.sleep(0.01)
+    self.assertTrue(all(path.exists() for path in (
+      worker_pid, tesseract_pid, recognition_started,
+    )))
+
+    launcher.kill()
+    launcher.communicate(timeout=5)
+    self.assertEqual(launcher.returncode, -signal.SIGKILL)
+    self.assert_pid_stopped(int(worker_pid.read_text(encoding="ascii")), timeout=3)
+    self.assert_pid_stopped(int(tesseract_pid.read_text(encoding="ascii")), timeout=3)
+    time.sleep(1)
+    self.assertFalse(survivor.exists(), "Tesseract survived launcher destruction")
 
   def test_request_id_is_echoed_on_every_capture_event(self):
     process = self.run_cli(
@@ -632,6 +717,98 @@ class ClearReadTests(unittest.TestCase):
     self.assertEqual(process.returncode, 1)
     self.assertEqual(self.events(process)[-1]["code"], "copy_too_large")
 
+  def test_capture_failure_family_has_stable_error_codes(self):
+    failures = (
+      (clearread.CommandTimeout(), "capture_timeout"),
+      (clearread.OutputLimitExceeded(), "capture_too_large"),
+    )
+    for failure, code in failures:
+      with self.subTest(code=code):
+        with mock.patch.object(clearread, "run_owned", side_effect=failure):
+          self.assert_error_code(code, lambda: clearread.capture_png("0,0 10x10"))
+
+    for response in ((1, b"", b"failed"), (0, b"not-a-png", b"")):
+      with self.subTest(response=response[0:2]):
+        with mock.patch.object(clearread, "run_owned", return_value=response):
+          self.assert_error_code(
+            "capture_failed", lambda: clearread.capture_png("0,0 10x10"),
+          )
+
+  def test_recognition_failure_family_has_stable_error_codes(self):
+    failures = (
+      (clearread.CommandTimeout(), "recognition_timeout"),
+      (clearread.OutputLimitExceeded(), "text_too_large"),
+    )
+    for failure, code in failures:
+      with self.subTest(code=code):
+        with mock.patch.object(clearread, "run_owned", side_effect=failure):
+          self.assert_error_code(
+            code, lambda: clearread.recognize_image(clearread.PNG_SIGNATURE, "eng"),
+          )
+
+    responses = (
+      ((1, b"", b"failed"), "recognition_failed"),
+      ((0, b" \n\t", b""), "no_text"),
+      ((0, b"\xff", b""), "invalid_text"),
+    )
+    for response, code in responses:
+      with self.subTest(code=code):
+        with mock.patch.object(clearread, "run_owned", return_value=response):
+          self.assert_error_code(
+            code, lambda: clearread.recognize_image(clearread.PNG_SIGNATURE, "eng"),
+          )
+
+  def test_clipboard_failure_family_has_stable_error_codes(self):
+    failures = (
+      (clearread.CommandTimeout(), "clipboard_timeout"),
+      (clearread.OutputLimitExceeded(), "text_too_large"),
+    )
+    for failure, code in failures:
+      with self.subTest(code=code):
+        with mock.patch.object(clearread, "run_owned", side_effect=failure):
+          self.assert_error_code(code, clearread.capture_clipboard)
+
+    responses = (
+      ((1, b"", b"failed"), "clipboard_unavailable"),
+      ((0, b" \n\t", b""), "no_text"),
+      ((0, b"\xff", b""), "invalid_text"),
+    )
+    for response, code in responses:
+      with self.subTest(code=code):
+        with mock.patch.object(clearread, "run_owned", return_value=response):
+          self.assert_error_code(code, clearread.capture_clipboard)
+
+  def test_copy_failure_family_has_stable_error_codes(self):
+    request = json.dumps({"text": "Copy me"}).encode("utf-8") + b"\n"
+    failures = (
+      (clearread.CommandTimeout(), "copy_timeout"),
+      (clearread.OutputLimitExceeded(), "copy_failed"),
+      ((1, b"", b"failed"), "copy_failed"),
+    )
+    for failure, code in failures:
+      with self.subTest(code=code, failure=type(failure).__name__):
+        stdin = mock.Mock(buffer=io.BytesIO(request))
+        patch_arguments = {"side_effect": failure} if isinstance(failure, Exception) \
+          else {"return_value": failure}
+        with mock.patch.object(clearread.sys, "stdin", stdin):
+          with mock.patch.object(clearread, "run_owned", **patch_arguments):
+            self.assert_error_code(code, clearread.copy_text)
+
+  def test_dependency_and_input_failures_have_stable_error_codes(self):
+    with mock.patch.object(clearread.shutil, "which", return_value=None):
+      self.assert_error_code(
+        "dependency_missing", lambda: clearread.run_owned(["not-installed"]),
+      )
+
+    with mock.patch.object(clearread, "_json_command", return_value={}):
+      self.assert_error_code("window_unavailable", clearread.active_window_geometry)
+    with mock.patch.object(clearread, "_json_command", return_value={}):
+      self.assert_error_code("monitor_unavailable", clearread.monitor_data)
+    self.assert_error_code("invalid_omarchy_path", lambda: clearread.region_geometry("relative"))
+    self.assert_error_code(
+      "picker_unavailable", lambda: clearread.region_geometry(str(self.sandbox / "missing")),
+    )
+
   def test_doctor_reports_bounded_language_aware_capabilities(self):
     environment = self.environment()
     output = io.StringIO()
@@ -690,6 +867,40 @@ class ClearReadTests(unittest.TestCase):
         with self.assertRaises(clearread.Cancelled):
           clearread.arm_parent_death_signal(expected_parent=333)
 
+  def test_launcher_validates_the_declared_shell_parent(self):
+    for invalid in ("0", "01", "+1", "-1", "not-a-pid", "2147483648"):
+      with self.subTest(invalid=invalid):
+        process = subprocess.run(
+          [sys.executable, str(ROOT / "bin" / "clearread"), "--shell-pid", invalid],
+          stdout=subprocess.PIPE,
+          stderr=subprocess.PIPE,
+          cwd=self.sandbox,
+          env=self.environment(),
+          timeout=2,
+          check=False,
+        )
+        self.assertEqual(process.returncode, 2)
+        self.assertIn(b"invalid shell process ID", process.stderr)
+
+    if sys.platform.startswith("linux"):
+      process = subprocess.run(
+        [
+          sys.executable,
+          str(ROOT / "bin" / "clearread"),
+          "--shell-pid",
+          "2147483647",
+          "doctor",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=self.sandbox,
+        env=self.environment(),
+        timeout=2,
+        check=False,
+      )
+      self.assertEqual(process.returncode, 130)
+      self.assertEqual(process.stdout, b"")
+
   def test_recognition_timeout_terminates_the_worker(self):
     pid_file = self.sandbox / "ocr-pid"
     self.script(self.fake_bin / "tesseract", """
@@ -738,12 +949,11 @@ class ClearReadTests(unittest.TestCase):
       "FAKE_SURVIVOR": str(survivor),
     })
     process = subprocess.Popen(
-      [
-        sys.executable, str(ROOT / "bin" / "clearread"),
+      self.launcher_command(
         "capture", "--mode", "region",
         "--omarchy-path", str(self.omarchy_path),
         "--language", "eng",
-      ],
+      ),
       stdout=subprocess.PIPE,
       stderr=subprocess.PIPE,
       cwd=self.sandbox,
@@ -794,12 +1004,11 @@ class ClearReadTests(unittest.TestCase):
       "FAKE_SURVIVOR": str(survivor),
     })
     process = subprocess.Popen(
-      [
-        sys.executable, str(ROOT / "bin" / "clearread"),
+      self.launcher_command(
         "capture", "--mode", "region",
         "--omarchy-path", str(self.omarchy_path),
         "--language", "eng",
-      ],
+      ),
       stdout=subprocess.PIPE,
       stderr=subprocess.PIPE,
       cwd=self.sandbox,
