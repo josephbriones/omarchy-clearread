@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+
+from pathlib import Path
+import os
+import signal
+import subprocess
+import sys
+
+
+ROOT = Path(__file__).resolve().parents[1]
+STOP_SIGNAL = None
+
+sys.path.insert(0, str(ROOT / "lib"))
+
+from clearread import arm_parent_death_signal, Cancelled, ClearReadError
+
+
+def request_stop(signum, _frame):
+  global STOP_SIGNAL
+
+  STOP_SIGNAL = signum
+
+
+def shell_parent(arguments):
+  if len(arguments) < 2 or arguments[0] != "--shell-pid":
+    return None, arguments
+
+  value = arguments[1]
+  if not value.isascii() or not value.isdigit():
+    raise ValueError()
+  parent = int(value)
+  if parent < 2 or parent > 2_147_483_647 or str(parent) != value:
+    raise ValueError()
+  return parent, arguments[2:]
+
+
+def main():
+  signal.signal(signal.SIGTERM, request_stop)
+  signal.signal(signal.SIGINT, request_stop)
+
+  try:
+    expected_shell, worker_arguments = shell_parent(sys.argv[1:])
+  except ValueError:
+    sys.stderr.write("ClearRead received an invalid shell process ID.\n")
+    return 2
+
+  try:
+    # Keep this launcher as Quickshell's direct child. If QML destroys its
+    # Process with SIGKILL, the worker receives SIGTERM and still gets to reap
+    # capture children before it exits.
+    arm_parent_death_signal(expected_shell)
+  except Cancelled:
+    return 130
+  except ClearReadError as error:
+    sys.stderr.write(error.message + "\n")
+    return 1
+
+  if STOP_SIGNAL is not None:
+    return 130
+
+  try:
+    worker = subprocess.Popen([
+      sys.executable,
+      str(ROOT / "lib" / "clearread.py"),
+      "--launcher-pid",
+      str(os.getpid()),
+      *worker_arguments,
+    ])
+  except OSError:
+    sys.stderr.write("ClearRead could not start its local worker.\n")
+    return 1
+
+  stop_forwarded = False
+  while True:
+    if STOP_SIGNAL is not None and not stop_forwarded:
+      if worker.poll() is None:
+        try:
+          worker.send_signal(STOP_SIGNAL)
+        except ProcessLookupError:
+          pass
+      stop_forwarded = True
+    try:
+      return_code = worker.wait(timeout=0.1)
+      break
+    except subprocess.TimeoutExpired:
+      continue
+
+  return return_code if return_code >= 0 else 128 - return_code
+
+
+raise SystemExit(main())

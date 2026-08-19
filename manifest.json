@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.josephbriones.clearread",
+  "name": "ClearRead",
+  "version": "0.1.0",
+  "author": "Joseph Briones",
+  "description": "Turn visible text into a local, adjustable reading surface.",
+  "kinds": [
+    "overlay"
+  ],
+  "entryPoints": {
+    "overlay": "ClearRead.qml"
+  },
+  "keepLoaded": true
+}

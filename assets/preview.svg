@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <defs>
+    <linearGradient id="desktop" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#10141d"/>
+      <stop offset="1" stop-color="#202838"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#66d9c4"/>
+      <stop offset="1" stop-color="#7aa2f7"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="24" stdDeviation="28" flood-color="#000" flood-opacity=".45"/>
+    </filter>
+    <clipPath id="readerClip">
+      <rect x="318" y="108" width="1138" height="684" rx="20"/>
+    </clipPath>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#desktop)"/>
+  <circle cx="1440" cy="40" r="350" fill="#7aa2f7" opacity=".07"/>
+  <circle cx="80" cy="840" r="390" fill="#66d9c4" opacity=".06"/>
+
+  <g opacity=".48">
+    <rect x="52" y="58" width="510" height="785" rx="18" fill="#0b0e14" stroke="#435067"/>
+    <rect x="52" y="58" width="510" height="44" rx="18" fill="#151b27"/>
+    <circle cx="78" cy="80" r="6" fill="#f7768e"/>
+    <circle cx="99" cy="80" r="6" fill="#e0af68"/>
+    <circle cx="120" cy="80" r="6" fill="#9ece6a"/>
+    <text x="307" y="85" text-anchor="middle" font-family="Inter, sans-serif" font-size="13" fill="#8a94a8">scanned-report.pdf</text>
+    <rect x="88" y="132" width="438" height="664" rx="3" fill="#ece9e0"/>
+    <text x="116" y="172" font-family="Georgia, serif" font-size="13" font-weight="bold" fill="#383630">A Small Guide to Comfortable Reading</text>
+    <g fill="#6c675d">
+      <rect x="116" y="194" width="360" height="5" rx="2"/><rect x="116" y="208" width="382" height="5" rx="2"/><rect x="116" y="222" width="344" height="5" rx="2"/>
+      <rect x="116" y="252" width="377" height="5" rx="2"/><rect x="116" y="266" width="352" height="5" rx="2"/><rect x="116" y="280" width="389" height="5" rx="2"/><rect x="116" y="294" width="330" height="5" rx="2"/>
+      <rect x="116" y="326" width="365" height="5" rx="2"/><rect x="116" y="340" width="382" height="5" rx="2"/><rect x="116" y="354" width="291" height="5" rx="2"/>
+      <rect x="116" y="386" width="388" height="5" rx="2"/><rect x="116" y="400" width="341" height="5" rx="2"/><rect x="116" y="414" width="374" height="5" rx="2"/><rect x="116" y="428" width="318" height="5" rx="2"/>
+      <rect x="116" y="460" width="371" height="5" rx="2"/><rect x="116" y="474" width="388" height="5" rx="2"/><rect x="116" y="488" width="350" height="5" rx="2"/>
+    </g>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="238" y="72" width="1290" height="756" rx="26" fill="#11151d" stroke="#60708a" stroke-width="2"/>
+    <rect x="238" y="72" width="1290" height="72" rx="26" fill="#171d28"/>
+    <rect x="238" y="120" width="1290" height="24" fill="#171d28"/>
+    <rect x="238" y="144" width="270" height="684" fill="#121720"/>
+    <line x1="508" y1="144" x2="508" y2="828" stroke="#30394a"/>
+
+    <circle cx="276" cy="108" r="9" fill="url(#accent)"/>
+    <text x="297" y="115" font-family="Inter, sans-serif" font-size="25" font-weight="700" fill="#f1f5f9">ClearRead</text>
+    <text x="432" y="113" font-family="Inter, sans-serif" font-size="14" fill="#8f9bad">Local OCR · nothing saved</text>
+
+    <rect x="1263" y="91" width="112" height="36" rx="9" fill="#222a38" stroke="#435067"/>
+    <text x="1319" y="114" text-anchor="middle" font-family="Inter, sans-serif" font-size="14" fill="#dce3ed">Read another</text>
+    <rect x="1388" y="91" width="104" height="36" rx="9" fill="#222a38" stroke="#435067"/>
+    <text x="1440" y="114" text-anchor="middle" font-family="Inter, sans-serif" font-size="14" fill="#dce3ed">Close  Esc</text>
+
+    <text x="270" y="184" font-family="Inter, sans-serif" font-size="12" font-weight="700" letter-spacing="1.4" fill="#7e8ca2">READING VIEW</text>
+    <text x="270" y="221" font-family="Inter, sans-serif" font-size="15" fill="#b9c2d0">Text size</text>
+    <rect x="270" y="237" width="206" height="44" rx="10" fill="#1c2330" stroke="#3c485c"/>
+    <text x="294" y="265" font-family="Inter, sans-serif" font-size="19" fill="#dce3ed">A−</text>
+    <text x="373" y="264" text-anchor="middle" font-family="Inter, sans-serif" font-size="15" font-weight="700" fill="#66d9c4">36 px</text>
+    <text x="451" y="265" font-family="Inter, sans-serif" font-size="19" fill="#dce3ed">A+</text>
+
+    <text x="270" y="316" font-family="Inter, sans-serif" font-size="15" fill="#b9c2d0">Typeface</text>
+    <rect x="270" y="332" width="206" height="44" rx="10" fill="#1c2330" stroke="#3c485c"/>
+    <text x="373" y="359" text-anchor="middle" font-family="Georgia, serif" font-size="16" fill="#f1f5f9">Serif</text>
+
+    <text x="270" y="394" font-family="Inter, sans-serif" font-size="15" fill="#b9c2d0">Column width</text>
+    <rect x="270" y="410" width="206" height="44" rx="10" fill="#1c2330" stroke="#3c485c"/>
+    <text x="373" y="437" text-anchor="middle" font-family="Inter, sans-serif" font-size="15" fill="#f1f5f9">Narrow · 45 ch</text>
+
+    <text x="270" y="472" font-family="Inter, sans-serif" font-size="15" fill="#b9c2d0">Spacing</text>
+    <rect x="270" y="488" width="206" height="44" rx="10" fill="#1c2330" stroke="#3c485c"/>
+    <text x="373" y="515" text-anchor="middle" font-family="Inter, sans-serif" font-size="15" fill="#f1f5f9">Open</text>
+
+    <text x="270" y="550" font-family="Inter, sans-serif" font-size="15" fill="#b9c2d0">Line focus</text>
+    <rect x="270" y="566" width="206" height="44" rx="10" fill="#16332f" stroke="#66d9c4" stroke-width="2"/>
+    <text x="373" y="593" text-anchor="middle" font-family="Inter, sans-serif" font-size="15" font-weight="700" fill="#75e3d0">1 line</text>
+
+    <text x="270" y="628" font-family="Inter, sans-serif" font-size="15" fill="#b9c2d0">Theme</text>
+    <rect x="270" y="644" width="206" height="44" rx="10" fill="#f4ecd8" stroke="#b8a98d"/>
+    <text x="373" y="671" text-anchor="middle" font-family="Inter, sans-serif" font-size="15" font-weight="700" fill="#221b13">Sepia</text>
+
+    <rect x="270" y="729" width="206" height="48" rx="10" fill="url(#accent)"/>
+    <text x="373" y="759" text-anchor="middle" font-family="Inter, sans-serif" font-size="15" font-weight="700" fill="#0d1820">Copy text</text>
+
+    <rect x="508" y="144" width="1020" height="684" fill="#f4ecd8"/>
+    <g clip-path="url(#readerClip)">
+      <text x="690" y="215" font-family="Georgia, serif" font-size="17" font-weight="700" letter-spacing="2" fill="#75654d">RECOGNIZED TEXT</text>
+      <text x="690" y="277" font-family="Georgia, serif" font-size="42" font-weight="700" fill="#221b13">A small guide to</text>
+      <text x="690" y="329" font-family="Georgia, serif" font-size="42" font-weight="700" fill="#221b13">comfortable reading</text>
+
+      <text x="690" y="405" font-family="Georgia, serif" font-size="31" fill="#221b13" letter-spacing="1.2">Readable text adapts to the reader.</text>
+      <text x="690" y="454" font-family="Georgia, serif" font-size="31" fill="#221b13" letter-spacing="1.2">It can grow larger, breathe more,</text>
+      <rect x="662" y="475" width="716" height="58" rx="8" fill="#d8c7a7" opacity=".74"/>
+      <text x="690" y="515" font-family="Georgia, serif" font-size="31" font-weight="700" fill="#221b13" letter-spacing="1.2">and settle into a useful line length.</text>
+      <text x="690" y="576" font-family="Georgia, serif" font-size="31" fill="#221b13" letter-spacing="1.2">The source does not have to know</text>
+      <text x="690" y="625" font-family="Georgia, serif" font-size="31" fill="#221b13" letter-spacing="1.2">which presentation works for you.</text>
+      <text x="690" y="704" font-family="Georgia, serif" font-size="19" fill="#75654d">OCR text can contain mistakes. Check critical details.</text>
+    </g>
+  </g>
+
+  <g transform="translate(1180 844)">
+    <rect x="0" y="0" width="346" height="34" rx="17" fill="#0b0e14" opacity=".88" stroke="#364154"/>
+    <circle cx="20" cy="17" r="5" fill="#66d9c4"/>
+    <text x="35" y="22" font-family="Inter, sans-serif" font-size="13" fill="#b9c2d0">Pixels in memory → local OCR → adjustable text</text>
+  </g>
+</svg>

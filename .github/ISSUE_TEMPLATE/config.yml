@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security issue privately
+    url: https://github.com/josephbriones/omarchy-clearread/security/advisories/new
+    about: Do not publish private screen or clipboard content in an issue.
