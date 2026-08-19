@@ -1186,8 +1186,11 @@ class ClearReadTests(unittest.TestCase):
       return False
 
     proc_stat = Path(f"/proc/{pid}/stat")
-    if proc_stat.is_file():
-      fields = proc_stat.read_text(encoding="ascii", errors="replace").split()
+    if Path("/proc").is_dir():
+      try:
+        fields = proc_stat.read_text(encoding="ascii", errors="replace").split()
+      except (FileNotFoundError, ProcessLookupError):
+        return False
       return len(fields) < 3 or fields[2] != "Z"
     try:
       status = subprocess.run(
