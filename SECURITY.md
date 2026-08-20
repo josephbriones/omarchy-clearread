@@ -20,7 +20,9 @@ The helper:
   leaves the worker time to reap only children it owns;
 - leases the native picker's frozen frame by verified process group and Linux
   pidfd, never by signalling an unverified numeric PID;
-- writes no screen pixel or recognized-text file during capture and OCR;
+- writes no named screen-pixel or recognized-text file during capture and OCR;
+- keeps an optional source image only in a size-bounded, sealed anonymous
+  Linux memory file owned by the supervised worker;
 - binds no socket and opens no network connection; and
 - renders all dynamic QML strings as plain text.
 
@@ -30,6 +32,12 @@ An explicit Copy starts the ordinary `wl-copy` selection provider so the
 chosen text stays pasteable until clipboard ownership changes; capture and OCR
 children remain foreground-owned and bounded. `wl-copy` may use its standard
 private, transient unlinked backing file while serving that selection.
+
+The optional source descriptor is accepted only from the active, request-ID
+matched capture result. QML validates its exact `/proc/<worker>/fd/<fd>` shape
+and dimensions before loading it. Closing or replacing the result writes the
+fixed `release` command; timeout, cancellation, launcher death, and shell death
+also close the descriptor through the existing parent-death chain.
 
 ## Trust boundary
 

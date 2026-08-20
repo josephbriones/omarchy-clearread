@@ -23,6 +23,7 @@ body:
         - Active window
         - Screen area
         - Clipboard
+        - Compare source
         - Reader only
     validations:
       required: true
@@ -37,7 +38,7 @@ body:
     id: version
     attributes:
       label: ClearRead version or commit
-      placeholder: 0.1.0 or a full commit SHA
+      placeholder: 0.2.0 or a full commit SHA
     validations:
       required: true
   - type: textarea

@@ -11,10 +11,13 @@ The Python suite supplies fake picker, Hyprland, capture, OCR, and clipboard
 executables. It covers geometry and language validation, every Wayland output
 transform, reflow, Unicode, stable failure families, timeouts, cancellation,
 output bounds, JSON protocol, copy input, child cleanup, and the absence of
-plugin-created capture artifacts. On Linux it also SIGKILLs the QML-facing
-launcher during selection, after the frozen frame has been handed to `grim`,
-and during Tesseract recognition, then proves the worker and owned descendants
-exit. The Node suite covers payload, event, settings, theme, and
+plugin-created capture artifacts. It also validates PNG headers, descriptor
+bounds, and source omission for clipboard or oversized images. On Linux, the
+suite additionally validates anonymous-memory sealing, exact source bytes,
+release/EOF/cancel cleanup, and file-descriptor counts. It also SIGKILLs the
+QML-facing launcher during selection, after the frozen frame has been handed
+to `grim`, and during Tesseract recognition, then proves the worker and owned
+descendants exit. The Node suite covers payload, event, settings, theme, and
 presentation-state boundaries.
 
 Portable tests prove code paths. They do not prove Wayland focus, compositor
@@ -37,6 +40,9 @@ bash scripts/acceptance-test.sh --real
 The real gate requires an interactive Omarchy Hyprland session and verifies
 active-window OCR and selected-region OCR as separate captures. It runs the
 portable suite first and closes the overlay on success, failure, or interrupt.
+Because ClearRead takes exclusive keyboard focus, run the gate from a terminal
+on a second display or an SSH TTY if returning to the terminal is awkward on a
+single display.
 
 Before release, record evidence for every unchecked item in
 [the release checklist](RELEASE_CHECKLIST.md), including:
@@ -44,13 +50,19 @@ Before release, record evidence for every unchecked item in
 - active-window capture with only the keyboard;
 - selected-region capture and Escape cancellation;
 - the ClearRead surface being absent from its own capture;
-- 200% text size at 1280×720 without horizontal reading scroll;
+- 100%, 200%, 300%, and 400% magnification at 1280×720 without horizontal
+  reading scroll;
+- Compare source Fit, 2x, and 4x views against the exact OCR fixture, including
+  keyboard and pointer panning;
 - Tab order and visible focus for every control;
 - 1-, 3-, and 5-line focus behavior;
 - clipboard unchanged until Copy;
 - two-display placement and scale factors 1.0, 1.25, and 2.0;
 - no image or text artifact from the capture/OCR pipeline in plugin config,
   cache, runtime, or temporary paths;
+- the anonymous source descriptor disappearing after Read another, Close,
+  disable, hot reload, and shell restart, with no file-descriptor growth across
+  repeated reads;
 - capture and OCR processes gone within two seconds after Cancel, Close,
   disable, hot reload, and shell restart; and
 - after explicit Copy, the ordinary `wl-copy` provider remains usable until

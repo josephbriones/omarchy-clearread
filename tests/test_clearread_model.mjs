@@ -77,9 +77,20 @@ test("presentation settings default safely and clamp only text size", () => {
   })
   assert.deepEqual(settings, {
     ...model.DEFAULT_SETTINGS,
-    fontSize: 72
+    fontSize: 112
   })
   assert.equal(Object.hasOwn(settings, "content"), false)
+})
+
+test("reflow magnification presets scale the default size through 400 percent", () => {
+  assert.deepEqual(model.MAGNIFICATION_PRESETS, [100, 200, 300, 400])
+  assert.deepEqual(
+    model.MAGNIFICATION_PRESETS.map(model.fontSizeForMagnification),
+    [28, 56, 84, 112]
+  )
+  assert.equal(model.fontSizeForMagnification(150), 28)
+  assert.equal(model.normalizeFontSize(17), 18)
+  assert.equal(model.normalizeFontSize(113), 112)
 })
 
 test("all supported presentation choices survive a settings round trip", () => {
@@ -209,11 +220,63 @@ test("result events bound text and retain only display-safe metadata", () => {
   assert.equal(result.mode, "region")
   assert.equal(result.text, "Heading\n\nA readable paragraph.")
   assert.equal(result.monitor, "eDP-1")
+  assert.equal(result.source, null)
   assert.deepEqual(model.parseEvent({ type: "result", requestId: 9, mode: "region", text: "  " }), { valid: false, type: "result" })
   assert.deepEqual(model.parseEvent({ type: "result", requestId: 9, mode: "region", text: ["unsafe"] }), { valid: false, type: "result" })
   assert.deepEqual(model.parseEvent({ type: "result", requestId: 9, mode: "network", text: "text" }), { valid: false, type: "result" })
   assert.deepEqual(model.parseEvent({ type: "result", requestId: 9, source: "region", text: "text" }), { valid: false, type: "result" })
   assert.deepEqual(model.parseEvent({ type: "result", requestId: 9, mode: "region", source: "window", text: "text" }), { valid: false, type: "result" })
+})
+
+test("source lens descriptors accept only bounded Linux proc-fd images", () => {
+  const source = {
+    uri: "file:///proc/4242/fd/7",
+    width: 7680,
+    height: 4320
+  }
+  assert.equal(source.width * source.height, model.MAX_SOURCE_PIXELS)
+  assert.deepEqual(model.sourceDescriptor(source), source)
+  assert.deepEqual(model.sourceDescriptor({
+    uri: "file:///proc/9999999999/fd/9999999999", width: 1, height: 1
+  }), { uri: "file:///proc/9999999999/fd/9999999999", width: 1, height: 1 })
+  assert.equal(model.sourceDescriptor({
+    uri: "file:///proc/99999999999/fd/7", width: 1, height: 1
+  }), null)
+  assert.equal(model.sourceDescriptor({
+    uri: "file:///proc/42/fd/99999999999", width: 1, height: 1
+  }), null)
+
+  const result = model.parseEvent({
+    type: "result",
+    requestId: 12,
+    mode: "window",
+    text: "Readable text",
+    source
+  })
+  assert.equal(result.valid, true)
+  assert.deepEqual(result.source, source)
+
+  const invalidSources = [
+    null,
+    { uri: "file:///proc/4242/fd/7", width: 0, height: 100 },
+    { uri: "file:///proc/4242/fd/7", width: 100.5, height: 100 },
+    { uri: "file:///proc/4242/fd/7", width: model.MAX_SOURCE_DIMENSION + 1, height: 1 },
+    { uri: "file:///proc/4242/fd/7", width: 8000, height: 5000 },
+    { uri: "file:///proc/0/fd/7", width: 100, height: 100 },
+    { uri: "file:///proc/self/fd/7", width: 100, height: 100 },
+    { uri: "file:///proc/4242/fd/07", width: 100, height: 100 },
+    { uri: "file:///tmp/clearread.png", width: 100, height: 100 },
+    { uri: "file:///proc/4242/fd/7", width: 100, height: 100, format: "png" }
+  ]
+  for (const invalid of invalidSources) {
+    assert.equal(model.sourceDescriptor(invalid), null)
+    assert.deepEqual(model.parseEvent({
+      type: "result", requestId: 12, mode: "region", text: "text", source: invalid
+    }), { valid: false, type: "result" })
+  }
+  assert.deepEqual(model.parseEvent({
+    type: "result", requestId: 12, mode: "clipboard", text: "text", source
+  }), { valid: false, type: "result" })
 })
 
 test("oversized result text is deterministically capped", () => {

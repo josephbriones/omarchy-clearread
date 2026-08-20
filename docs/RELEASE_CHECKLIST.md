@@ -24,7 +24,8 @@ to the marketplace until every applicable item has evidence.
 
 - [ ] Opening and demo mode start no pixel capture, clipboard read, or OCR
       recognition.
-- [ ] Region and active-window PNG bytes never touch disk.
+- [ ] Region and active-window PNG bytes never become named files; eligible
+      Compare source images exist only in sealed anonymous memory.
 - [ ] Recognized and clipboard text are absent from logs and settings.
 - [ ] Clipboard is unchanged before explicit Copy.
 - [ ] Cancel, Close, disable, reload, and shell exit reap every capture and OCR
@@ -43,6 +44,12 @@ to the marketplace until every applicable item has evidence.
       are distinct and actionable.
 - [ ] Generated OCR fixture produces the expected normalized text.
 - [ ] Every presentation control changes only presentation and survives reopen.
+- [ ] 100%, 200%, 300%, and 400% magnification work from keyboard and pointer
+      without changing unrelated presentation preferences.
+- [ ] Compare source shows the exact window/region OCR input at Fit, 2x, and 4x;
+      clipboard, demo, and out-of-bounds images offer no source view.
+- [ ] Read another, Close, disable, reload, and shell exit release the source
+      descriptor without file-descriptor growth across repeated captures.
 - [ ] Explicit Copy works from both keyboard and pointer without placing text
       in an argument, named plugin file, or persistent history.
 - [ ] Demo, capture, copy, close, reopen, disable, and hot reload are repeatable.
@@ -53,8 +60,10 @@ to the marketplace until every applicable item has evidence.
 - [ ] Escape leaves every state without a focus trap.
 - [ ] Pointer targets are at least 44×44 logical pixels.
 - [ ] Four palettes meet the documented contrast targets.
-- [ ] Maximum size and spacing fit 1280×720 without overlap or horizontal text
-      scrolling.
+- [ ] 400% magnification and maximum spacing fit 1280×720 without overlap or
+      horizontal text scrolling.
+- [ ] Source Lens pans from keyboard and pointer, retains visible focus, and
+      returns to reflowed text with Escape.
 - [ ] 1-, 3-, and 5-line focus masks stay inside the viewport.
 - [ ] Reader placement is correct on two displays and fractional scale.
 - [ ] Dynamic text is PlainText and Unicode/RTL samples do not crash or fetch.

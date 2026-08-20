@@ -24,8 +24,11 @@ ClearRead.qml ── foreground Process ── bin/clearread launcher
                                                             ▼
                                                    bounded JSONL result
                                                             │
-                                                            ▼
-                                               plain-text reflow reader
+                                         ┌──────────────────┤
+                                         ▼                  ▼
+                              plain-text reflow reader   sealed source memfd
+                                                            │
+                                                            └── explicit release
 ```
 
 The QML plugin passes `Quickshell.processId` to a tiny non-exec launcher. The
@@ -39,7 +42,10 @@ group.
 
 The extra process is intentional: it leaves the worker alive just long enough
 to perform bounded cleanup even when the QML-owned process is force-killed.
-No capture or OCR process is left as a daemon.
+No capture or OCR process is left as a daemon. When **Compare source** is
+available, the same supervised worker stays alive only to own a sealed
+anonymous image descriptor. It exits after QML sends the fixed release line,
+closes its stdin, or dies.
 
 Explicit Copy follows the normal Wayland clipboard contract. `wl-copy` may
 keep a selection provider after ClearRead exits so the chosen text remains
@@ -68,7 +74,13 @@ signalled.
 Tesseract.
 
 For pixel paths, `grim` returns PNG bytes on stdout. Those bytes are passed to
-Tesseract on stdin. Both stages are bounded and no filename exists.
+Tesseract on stdin. Both stages are bounded and no filename exists. After OCR,
+valid images within the 32,768-pixel per-axis and 33,177,600-pixel decoded
+bounds can be copied into a sealed anonymous Linux memory file. The worker
+emits only a validated `/proc` file-descriptor URI and dimensions, then holds
+that descriptor until QML sends `release\n`, closes stdin, or cancels. If the
+platform or image is ineligible, OCR still succeeds and the source descriptor
+is simply omitted.
 
 ## Protocol
 
@@ -77,15 +89,16 @@ The helper writes one JSON object per line. Events are deliberately small:
 - `doctor` reports exact capability booleans, missing tools, and issues;
 - `status` reports a capture mode plus `selecting`, `capturing`, or
   `recognizing`, with an optional monitor name;
-- `result` carries a capture mode, bounded plain text, and an optional monitor
-  name;
+- `result` carries a capture mode, bounded plain text, an optional monitor
+  name, and, for eligible pixel captures, a strict temporary source descriptor;
 - `cancelled` carries the capture mode and distinguishes an ordinary Escape
   from a failure; and
 - `error` carries a stable code and a bounded human-readable message.
 
 The JavaScript boundary rejects malformed or unknown events and bounds
-oversized text and metadata. QML renders every dynamic field with
-`Text.PlainText`.
+oversized text and metadata. It accepts only numeric, size-bounded Linux proc-fd
+source descriptors on window or region results. QML renders every dynamic text
+field with `Text.PlainText`.
 
 ## Reflow
 
@@ -98,8 +111,13 @@ rewrite ambiguous text.
 
 The reader remains a literal plain-text surface. Presentation controls change
 only layout: font, scale, spacing, width, contrast, and the viewport line-focus
-mask. Copy is an explicit button action; v0.1 does not trade plain-text safety
-for rich-text selection markup.
+mask. The reflow magnifier maps the default 28-pixel reading size to explicit
+100%, 200%, 300%, and 400% presets while leaving every other presentation
+choice alone. Overlong tokens wrap inside the document column, so magnification
+does not introduce a second reading direction. **Compare source** is a separate
+Fit, 2x, or 4x pixel view of the exact OCR input; it never recaptures the screen.
+Copy is an explicit button action; v0.2 does not trade plain-text safety for
+rich-text selection markup.
 
 ## Persistent state
 

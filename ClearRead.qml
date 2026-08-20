@@ -34,6 +34,10 @@ Item {
   property string captureDiagnostic: ""
   property string copyDiagnostic: ""
   property string transientMessage: ""
+  property bool sourceHeld: false
+  property bool sourceViewVisible: false
+  property var sourceDescriptor: null
+  property int sourceZoom: 0
 
   property bool doctorReady: false
   property string doctorMessage: ""
@@ -91,6 +95,11 @@ Item {
     : configHome + "/io.github.josephbriones.clearread"
   readonly property string settingsPath: settingsDirectory === "" ? "" : settingsDirectory + "/settings.json"
   readonly property bool readerVisible: phase === "reading" && documentText !== ""
+  readonly property bool sourceAvailable: sourceHeld && !demoMode
+    && (activeMode === "window" || activeMode === "region")
+  readonly property string sourceUri: sourceDescriptor ? String(sourceDescriptor.uri) : ""
+  readonly property int sourceWidth: sourceDescriptor ? Number(sourceDescriptor.width) : 0
+  readonly property int sourceHeight: sourceDescriptor ? Number(sourceDescriptor.height) : 0
   readonly property var colours: ClearReadModel.palette(paletteName)
   readonly property string resolvedFontFamily: ClearReadModel.fontFamilyName(fontFamily, Style.font.family)
   readonly property real readerLineStep: Math.max(1, readerFontMetrics.lineSpacing * lineHeight)
@@ -105,9 +114,11 @@ Item {
   }
   readonly property string privacyStatus: {
     if (demoMode) return "Synthetic preview · no screen or clipboard access"
+    if (sourceViewVisible) return "Temporary source view · released when you close or read another"
     if (phase === "selecting") return "Waiting for your selection"
     if (phase === "capturing") return "Capturing only what you requested"
     if (phase === "recognizing") return "Recognizing locally · nothing is uploaded"
+    if (readerVisible && sourceHeld) return "Temporary local result and source · nothing is saved"
     if (readerVisible) return "Temporary local result · cleared when this reader closes"
     return "Nothing is being captured"
   }
@@ -124,8 +135,91 @@ Item {
   }
 
   function processesBusy() {
-    return doctorProcess.running || captureProcess.running || copyProcess.running
+    return doctorProcess.running || (captureProcess.running && !sourceHeld) || copyProcess.running
       || doctorExpectedStop || captureExpectedStop || copyExpectedStop
+  }
+
+  function processesRunning() {
+    return doctorProcess.running || captureProcess.running || copyProcess.running
+      || settingsDirectoryProcess.running
+  }
+
+  function discardSource() {
+    sourceViewVisible = false
+    sourceHeld = false
+    sourceDescriptor = null
+    sourceZoom = 0
+    sourceFlick.contentX = 0
+    sourceFlick.contentY = 0
+  }
+
+  function releaseSource() {
+    if (!sourceHeld) return false
+    sourceViewVisible = false
+    sourceHeld = false
+    sourceDescriptor = null
+    sourceZoom = 0
+    sourceFlick.contentX = 0
+    sourceFlick.contentY = 0
+    if (!captureProcess.running) return false
+    captureExpectedStop = true
+    captureProcess.write("release\n")
+    sourceReleaseTimer.restart()
+    return true
+  }
+
+  function replaceSource(descriptor) {
+    if (sourceHeld) releaseSource()
+    sourceDescriptor = descriptor
+    sourceHeld = descriptor !== null
+    sourceViewVisible = false
+    sourceZoom = 0
+  }
+
+  function showSource() {
+    if (!sourceAvailable) return
+    sourceViewVisible = true
+    sourceZoom = 0
+    sourceFlick.contentX = 0
+    sourceFlick.contentY = 0
+    Qt.callLater(function() { sourceBackButton.forceActiveFocus() })
+  }
+
+  function showText() {
+    if (!sourceViewVisible) return
+    sourceViewVisible = false
+    Qt.callLater(function() { compareSourceButton.forceActiveFocus() })
+  }
+
+  function setSourceZoom(value) {
+    var zoom = value === 2 || value === 4 ? value : 0
+    var horizontalCenter = sourceFlick.contentWidth > 0
+      ? (sourceFlick.contentX + sourceFlick.width / 2) / sourceFlick.contentWidth : 0.5
+    var verticalCenter = sourceFlick.contentHeight > 0
+      ? (sourceFlick.contentY + sourceFlick.height / 2) / sourceFlick.contentHeight : 0.5
+    sourceZoom = zoom
+    Qt.callLater(function() {
+      sourceFlick.contentX = ClearReadModel.clamp(
+        horizontalCenter * sourceFlick.contentWidth - sourceFlick.width / 2,
+        0, Math.max(0, sourceFlick.contentWidth - sourceFlick.width))
+      sourceFlick.contentY = ClearReadModel.clamp(
+        verticalCenter * sourceFlick.contentHeight - sourceFlick.height / 2,
+        0, Math.max(0, sourceFlick.contentHeight - sourceFlick.height))
+    })
+  }
+
+  function adjustSourceZoom(direction) {
+    var levels = [0, 2, 4]
+    var index = levels.indexOf(sourceZoom)
+    setSourceZoom(levels[ClearReadModel.clamp(index + direction, 0, levels.length - 1)])
+  }
+
+  function panSource(horizontal, vertical, accelerated) {
+    var step = accelerated ? 192 : 48
+    sourceFlick.contentX = ClearReadModel.clamp(sourceFlick.contentX + horizontal * step,
+      0, Math.max(0, sourceFlick.contentWidth - sourceFlick.width))
+    sourceFlick.contentY = ClearReadModel.clamp(sourceFlick.contentY + vertical * step,
+      0, Math.max(0, sourceFlick.contentHeight - sourceFlick.height))
   }
 
   function modeAvailable(mode) {
@@ -176,6 +270,7 @@ Item {
     captureDiagnostic = ""
     copyDiagnostic = ""
     transientMessage = ""
+    discardSource()
     doctorReady = false
     doctorMessage = ""
     doctorMissing = []
@@ -230,6 +325,7 @@ Item {
 
   function close() {
     captureDelay.stop()
+    var sourceReleasePending = releaseSource()
     opened = false
     surfaceVisible = false
     pendingOpen = false
@@ -255,15 +351,15 @@ Item {
     else copyStartPending = false
 
     doctorProcess.running = false
-    captureProcess.running = false
+    if (!sourceReleasePending) captureProcess.running = false
     copyProcess.running = false
     phase = "idle"
     demoMode = false
   }
 
   function dismiss() {
-    close()
     if (shell && typeof shell.hide === "function") shell.hide(pluginId)
+    else close()
   }
 
   function resumePendingOpen() {
@@ -279,7 +375,8 @@ Item {
       if (!root.opened || !root.surfaceVisible) return
       var target = closeButton
       if (root.readerVisible) {
-        if (copyButton.visible && copyButton.enabled) target = copyButton
+        if (root.sourceViewVisible) target = sourceBackButton
+        else if (copyButton.visible && copyButton.enabled) target = copyButton
         else if (readAnotherButton.visible && readAnotherButton.enabled) target = readAnotherButton
       } else if (root.phase === "ready") {
         if (windowButton.visible && windowButton.enabled) target = windowButton
@@ -302,7 +399,7 @@ Item {
 
   function showDemo() {
     if (!opened || pendingOpen || processesBusy() || doctorStartPending
-        || captureStartPending || copyStartPending) return
+        || captureStartPending || copyStartPending || sourceHeld || captureProcess.running) return
     demoMode = true
     doctorReady = false
     captureTerminalSeen = true
@@ -358,7 +455,8 @@ Item {
   }
 
   function readAnother() {
-    if (!opened || captureProcess.running || captureStartPending) return
+    if (!opened || (captureProcess.running && !sourceHeld) || captureStartPending) return
+    releaseSource()
     documentText = ""
     documentCharacters = 0
     activeMode = ""
@@ -380,7 +478,7 @@ Item {
   }
 
   function copyDocument() {
-    if (!opened || documentText === "" || captureProcess.running || captureStartPending
+    if (!opened || documentText === "" || (captureProcess.running && !sourceHeld) || captureStartPending
         || copyProcess.running || copyStartPending) return
     copyPayload = documentText
     copyDiagnostic = ""
@@ -426,6 +524,7 @@ Item {
       activeCaptureRequestId = 0
       documentText = event.text
       documentCharacters = ClearReadModel.codePointLength(event.text)
+      replaceSource(event.source)
       captureMonitor = event.monitor || captureMonitor
       if (captureMonitor !== "") targetMonitor = captureMonitor
       errorMessage = ""
@@ -519,7 +618,11 @@ Item {
   }
 
   function adjustFontSize(amount) {
-    fontSize = Math.round(ClearReadModel.clamp(fontSize + amount, 18, 72))
+    fontSize = ClearReadModel.normalizeFontSize(fontSize + amount)
+  }
+
+  function setMagnification(percent) {
+    fontSize = ClearReadModel.fontSizeForMagnification(percent)
   }
 
   function scrollDocument(amount) {
@@ -571,6 +674,16 @@ Item {
     interval: 1800
     repeat: false
     onTriggered: root.transientMessage = ""
+  }
+
+  Timer {
+    id: sourceReleaseTimer
+    interval: 750
+    repeat: false
+    onTriggered: {
+      if (root.captureExpectedStop && captureProcess.running && !root.sourceHeld)
+        captureProcess.running = false
+    }
   }
 
   FontMetrics {
@@ -685,6 +798,7 @@ Item {
 
   Process {
     id: captureProcess
+    stdinEnabled: true
     command: [root.backendPath, "--shell-pid", root.shellProcessId,
       "capture", "--mode", root.activeMode,
       "--omarchy-path", root.omarchyPath, "--language", root.language,
@@ -721,10 +835,23 @@ Item {
     onExited: function(exitCode) {
       var finishedId = root.activeCaptureRequestId
       root.captureStartPending = false
+      sourceReleaseTimer.stop()
       if (root.captureExpectedStop) {
         root.captureExpectedStop = false
+        if (root.opened && !root.pendingOpen) root.requestReaderFocus()
         Qt.callLater(function() { root.resumePendingOpen() })
         return
+      }
+      if (root.sourceHeld) {
+        var wasViewingSource = root.sourceViewVisible
+        root.discardSource()
+        if (root.opened && !root.pendingOpen) {
+          root.transientMessage = wasViewingSource
+            ? "The temporary source view ended; your readable text remains."
+            : "The temporary source was released."
+          transientMessageTimer.restart()
+          root.requestReaderFocus()
+        }
       }
       Qt.callLater(function() {
         if (!root.opened || root.pendingOpen || finishedId !== root.activeCaptureRequestId
@@ -805,11 +932,13 @@ Item {
         visible: root.surfaceVisible,
         state: root.phase,
         demo: root.demoMode,
-        running: root.processesBusy(),
+        running: root.processesRunning(),
         ready: root.doctorReady,
         mode: root.activeMode,
         hasText: root.documentText !== "",
-        characters: root.documentCharacters
+        characters: root.documentCharacters,
+        sourceHeld: root.sourceHeld,
+        sourceView: root.sourceViewVisible
       })
     }
     function ping(): string { return "ok" }
@@ -837,9 +966,36 @@ Item {
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: function(event) {
         if (event.key === Qt.Key_Escape) {
-          root.dismiss()
+          if (root.sourceViewVisible) root.showText()
+          else root.dismiss()
           event.accepted = true
           return
+        }
+        if (root.sourceViewVisible) {
+          if (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) {
+            root.adjustSourceZoom(1)
+            event.accepted = true
+            return
+          }
+          if (event.key === Qt.Key_Minus) {
+            root.adjustSourceZoom(-1)
+            event.accepted = true
+            return
+          }
+          if (event.key === Qt.Key_0) {
+            root.setSourceZoom(0)
+            event.accepted = true
+            return
+          }
+          if (event.key === Qt.Key_Left || event.key === Qt.Key_Right
+              || event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
+            if (event.modifiers !== Qt.NoModifier && event.modifiers !== Qt.ShiftModifier) return
+            root.panSource(event.key === Qt.Key_Left ? -1 : event.key === Qt.Key_Right ? 1 : 0,
+              event.key === Qt.Key_Up ? -1 : event.key === Qt.Key_Down ? 1 : 0,
+              (event.modifiers & Qt.ShiftModifier) !== 0)
+            event.accepted = true
+            return
+          }
         }
         if ((event.modifiers & Qt.ControlModifier)
             && (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal)) {
@@ -853,9 +1009,18 @@ Item {
           return
         }
         if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_0) {
-          root.fontSize = ClearReadModel.DEFAULT_SETTINGS.fontSize
+          root.setMagnification(100)
           event.accepted = true
           return
+        }
+        if (event.modifiers & Qt.ControlModifier) {
+          var presetKeys = [Qt.Key_1, Qt.Key_2, Qt.Key_3, Qt.Key_4]
+          var presetIndex = presetKeys.indexOf(event.key)
+          if (presetIndex !== -1) {
+            root.setMagnification(ClearReadModel.MAGNIFICATION_PRESETS[presetIndex])
+            event.accepted = true
+            return
+          }
         }
         if (!root.readerVisible) return
         if (root.focusLines > 0 && event.modifiers === Qt.NoModifier
@@ -936,13 +1101,42 @@ Item {
             }
 
             AccessButton {
+              id: compareSourceButton
+              visible: root.readerVisible && root.sourceAvailable && !root.sourceViewVisible
+              text: "Compare source"
+              focusable: true
+              foreground: root.colours.text
+              accent: root.colours.accent
+              bordered: true
+              tooltipText: "Magnify the temporary source image"
+              Accessible.role: Accessible.Button
+              Accessible.name: "Compare recognized text with the temporary source image"
+              Accessible.description: "The source stays in memory and is released when you close or read another item"
+              Accessible.onPressAction: clicked()
+              onClicked: root.showSource()
+            }
+            AccessButton {
+              id: sourceBackButton
+              visible: root.readerVisible && root.sourceViewVisible
+              text: "Readable text"
+              focusable: true
+              foreground: root.colours.text
+              accent: root.colours.accent
+              bordered: true
+              tooltipText: "Return to the reflowed text"
+              Accessible.role: Accessible.Button
+              Accessible.name: "Return to readable text"
+              Accessible.onPressAction: clicked()
+              onClicked: root.showText()
+            }
+            AccessButton {
               id: copyButton
               visible: root.readerVisible
               text: "Copy"
               iconText: "⧉"
               focusable: true
               enabled: !copyProcess.running && !root.copyStartPending
-                && !captureProcess.running && !root.captureStartPending
+                && (!captureProcess.running || root.sourceHeld) && !root.captureStartPending
                 && (root.demoMode || root.doctorCapabilities.copy === true)
               foreground: root.colours.text
               accent: root.colours.accent
@@ -958,7 +1152,7 @@ Item {
               visible: root.readerVisible
               text: "Read another"
               focusable: true
-              enabled: !captureProcess.running && !root.captureStartPending
+              enabled: (!captureProcess.running || root.sourceHeld) && !root.captureStartPending
               foreground: root.colours.text
               accent: root.colours.accent
               bordered: true
@@ -1212,6 +1406,7 @@ Item {
             spacing: Style.space(16)
 
             BorderSurface {
+              visible: !root.sourceViewVisible
               Layout.preferredWidth: Math.min(312, Math.max(248, readerLayout.width * 0.29))
               Layout.fillHeight: true
               color: root.colours.surface
@@ -1249,11 +1444,51 @@ Item {
                     wrapMode: Text.WordWrap
                   }
 
+                  Text {
+                    text: "Reflow magnifier"
+                    color: root.colours.text
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: true
+                  }
+                  Text {
+                    width: parent.width
+                    text: "Enlarge text while it rewraps to fit the page."
+                    color: root.colours.muted
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.WordWrap
+                  }
+                  Flow {
+                    width: parent.width
+                    spacing: Style.space(5)
+                    Repeater {
+                      model: ClearReadModel.MAGNIFICATION_PRESETS
+                      delegate: AccessButton {
+                        required property var modelData
+                        text: modelData + "%"
+                        focusable: true
+                        selected: root.fontSize === ClearReadModel.fontSizeForMagnification(modelData)
+                        foreground: root.colours.text
+                        accent: root.colours.accent
+                        bordered: true
+                        Accessible.role: Accessible.RadioButton
+                        Accessible.name: "Set text magnification to " + modelData + " percent"
+                        Accessible.checkable: true
+                        Accessible.checked: selected
+                        Accessible.onPressAction: clicked()
+                        Accessible.onToggleAction: clicked()
+                        onActiveFocusChanged: root.revealSetting(this)
+                        onClicked: root.setMagnification(modelData)
+                      }
+                    }
+                  }
+
                   RowLayout {
                     width: parent.width
                     Text {
                       Layout.fillWidth: true
-                      text: "Text size"
+                      text: "Custom size"
                       color: root.colours.text
                       font.family: Style.font.family
                       font.pixelSize: Style.font.bodySmall
@@ -1262,7 +1497,7 @@ Item {
                     AccessButton {
                       text: "A−"
                       focusable: true
-                      enabled: root.fontSize > 18
+                      enabled: root.fontSize > ClearReadModel.MIN_FONT_SIZE
                       foreground: root.colours.text
                       accent: root.colours.accent
                       bordered: true
@@ -1282,7 +1517,7 @@ Item {
                     AccessButton {
                       text: "A+"
                       focusable: true
-                      enabled: root.fontSize < 72
+                      enabled: root.fontSize < ClearReadModel.MAX_FONT_SIZE
                       foreground: root.colours.text
                       accent: root.colours.accent
                       bordered: true
@@ -1570,7 +1805,7 @@ Item {
 
                   Text {
                     width: parent.width
-                    text: "Ctrl +/− changes size · Ctrl 0 resets size · Page Up/Down scrolls"
+                    text: "Ctrl 1–4 selects 100–400% · Ctrl +/− fine-tunes · Ctrl 0 resets · Page Up/Down scrolls"
                     color: root.colours.muted
                     font.family: Style.font.family
                     font.pixelSize: Style.font.caption
@@ -1580,8 +1815,147 @@ Item {
               }
             }
 
+            ColumnLayout {
+              id: sourceLens
+              visible: root.sourceViewVisible
+              Layout.fillWidth: true
+              Layout.fillHeight: true
+              spacing: Style.space(10)
+
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(10)
+
+                Column {
+                  Layout.fillWidth: true
+                  spacing: 2
+                  Text {
+                    text: "Source lens"
+                    color: root.colours.text
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.subtitle
+                    font.bold: true
+                  }
+                  Text {
+                    width: parent.width
+                    text: "A temporary view of the pixels used for this reading. It is never recaptured or saved by ClearRead."
+                    textFormat: Text.PlainText
+                    color: root.colours.muted
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.WordWrap
+                  }
+                }
+
+                Repeater {
+                  model: [
+                    { label: "Fit", value: 0 },
+                    { label: "2×", value: 2 },
+                    { label: "4×", value: 4 }
+                  ]
+                  delegate: AccessButton {
+                    required property var modelData
+                    text: modelData.label
+                    focusable: true
+                    selected: root.sourceZoom === modelData.value
+                    foreground: root.colours.text
+                    accent: root.colours.accent
+                    bordered: true
+                    Accessible.role: Accessible.RadioButton
+                    Accessible.name: modelData.value === 0
+                      ? "Fit source image to the available space"
+                      : "Magnify source image to " + modelData.value + " times"
+                    Accessible.checkable: true
+                    Accessible.checked: selected
+                    Accessible.onPressAction: clicked()
+                    Accessible.onToggleAction: clicked()
+                    onClicked: root.setSourceZoom(modelData.value)
+                  }
+                }
+              }
+
+              Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                color: "#000000"
+                radius: Style.cornerRadius
+                border.color: root.colours.border
+                border.width: root.paletteName === "contrast" ? 2 : 1
+                clip: true
+
+                Flickable {
+                  id: sourceFlick
+                  anchors.fill: parent
+                  anchors.margins: 1
+                  readonly property real fitScale: root.sourceWidth > 0 && root.sourceHeight > 0
+                    ? Math.min(width / root.sourceWidth, height / root.sourceHeight) : 1
+                  readonly property real imageScale: root.sourceZoom === 0 ? fitScale : root.sourceZoom
+                  contentWidth: Math.max(width, root.sourceWidth * imageScale)
+                  contentHeight: Math.max(height, root.sourceHeight * imageScale)
+                  clip: true
+                  interactive: true
+                  boundsBehavior: Flickable.StopAtBounds
+                  Controls.ScrollBar.horizontal: Controls.ScrollBar {}
+                  Controls.ScrollBar.vertical: Controls.ScrollBar {}
+
+                  Image {
+                    id: sourceImage
+                    x: Math.max(0, (sourceFlick.contentWidth - width) / 2)
+                    y: Math.max(0, (sourceFlick.contentHeight - height) / 2)
+                    width: root.sourceWidth * sourceFlick.imageScale
+                    height: root.sourceHeight * sourceFlick.imageScale
+                    source: root.sourceViewVisible ? root.sourceUri : ""
+                    cache: false
+                    asynchronous: true
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    Accessible.role: Accessible.Graphic
+                    Accessible.name: "Temporary source image"
+                    Accessible.description: "Drag to pan, use plus and minus to magnify, zero to fit, or Escape to return to readable text"
+                  }
+                }
+
+                Text {
+                  visible: sourceImage.status === Image.Loading
+                  anchors.centerIn: parent
+                  text: "Loading temporary source image…"
+                  textFormat: Text.PlainText
+                  color: "#ffffff"
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.body
+                  Accessible.role: Accessible.StaticText
+                  Accessible.name: text
+                }
+
+                Text {
+                  visible: sourceImage.status === Image.Error
+                  anchors.centerIn: parent
+                  width: Math.min(parent.width - Style.space(32), 520)
+                  text: "The temporary source image could not be displayed. Your readable text is still available."
+                  textFormat: Text.PlainText
+                  color: "#ffffff"
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.body
+                  horizontalAlignment: Text.AlignHCenter
+                  wrapMode: Text.WordWrap
+                }
+              }
+
+              Text {
+                Layout.fillWidth: true
+                text: "+/− magnifies · 0 fits · arrows pan · Shift+arrows pan farther · drag with a pointer · Escape returns to text"
+                textFormat: Text.PlainText
+                color: root.colours.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+              }
+            }
+
             Rectangle {
               id: documentFrame
+              visible: !root.sourceViewVisible
               Layout.fillWidth: true
               Layout.fillHeight: true
               color: root.colours.surface
@@ -1612,7 +1986,7 @@ Item {
                   width: ClearReadModel.columnPixels(root.columnWidth, docFlick.width - Style.space(48))
                   text: root.documentText
                   textFormat: Text.PlainText
-                  wrapMode: Text.WordWrap
+                  wrapMode: Text.Wrap
                   color: root.colours.text
                   font.family: root.resolvedFontFamily
                   font.pixelSize: root.fontSize

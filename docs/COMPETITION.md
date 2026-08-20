@@ -20,17 +20,20 @@ usable without asking the source application to cooperate.
 
 The durable extension points are presentation presets, better layout
 reconstruction, additional local OCR engines, accessibility-tree extraction,
-and optional speech output. The 0.1 release keeps those out until the central
-capture-to-reading path is trustworthy.
+and optional speech output. Version 0.2 adds 100–400% reflow magnification and a
+temporary source lens for checking recognition against the exact captured
+pixels, while leaving live desktop zoom to Omarchy's native compositor.
 
 ## Twenty-second demonstration
 
 1. Open a screenshot containing dense, small text.
 2. Invoke ClearRead and choose **Read active window** from the keyboard.
-3. Enlarge the result, narrow the column, switch to Sepia, open the spacing,
-   and enable one-line focus.
-4. Navigate and copy without touching the pointer.
-5. Close, then show that no capture file, OCR history, or worker remains.
+3. Choose 400% magnification and show that the text still follows one vertical
+   reading flow.
+4. Open **Compare source** at 4x to verify one number, then return to text with
+   Escape and copy without touching the pointer.
+5. Close, then show that no capture file, OCR history, descriptor, or worker
+   remains.
 
 That demonstrates the value proposition and the privacy boundary in one pass.
 

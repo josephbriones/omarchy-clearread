@@ -17,14 +17,18 @@ It is the difference between making pixels larger and making text readable.
 - Uses Omarchy's native picker for a precise screen region.
 - Opens existing clipboard text without taking a screenshot.
 - Reflows recognized text at a comfortable line length.
+- Magnifies recognized text from 100% to 400% without horizontal reading.
+- Lets window and region reads compare OCR with the exact captured pixels.
 - Adjusts typeface, size, weight, line height, letter spacing, word spacing,
   column width, contrast, and line focus.
 - Works from the keyboard, including capture, reading, copying, and closing.
 
-ClearRead is local and transient. It creates no screenshot file, OCR history,
-account, analytics record, or network request. The captured image exists only
-long enough to reach Tesseract. Recognized text is discarded from ClearRead
-when the reader closes. Text the user explicitly copied remains on the normal
+ClearRead is local and transient. It creates no named screenshot, OCR history,
+account, analytics record, or network request. After local recognition, an
+eligible window or region image may remain in a sealed anonymous memory file
+so **Compare source** can verify the OCR. ClearRead releases it when the reader
+closes or starts another read. Recognized text is discarded from ClearRead at
+the same boundary. Text the user explicitly copied remains on the normal
 Wayland clipboard. Only presentation preferences remain in ClearRead.
 The standard `wl-copy` implementation may use a private, transient unlinked
 backing file while it owns that explicitly requested clipboard selection; it
@@ -62,6 +66,11 @@ Then choose one explicit action:
 
 ClearRead hides its own surface before pixel capture. Once the image is in
 memory, it returns with a local recognition state and then opens the reader.
+Window and region results may offer **Compare source**, a temporary Fit, 2x,
+or 4x view of the exact pixels sent to OCR. This is useful for checking names,
+amounts, model numbers, punctuation, and other details OCR can misread. The
+button is absent for clipboard text, demo mode, and images outside the bounded
+source-view limits.
 
 In the reader, Tab moves through every control, including the explicit
 **Copy** button. Other useful keys:
@@ -69,13 +78,21 @@ In the reader, Tab moves through every control, including the explicit
 | Key | Action |
 |---|---|
 | `Ctrl` + `+` / `Ctrl` + `-` | Increase or decrease text size |
+| `Ctrl` + `1` / `2` / `3` / `4` | Set 100%, 200%, 300%, or 400% reflow magnification |
 | `Ctrl` + `0` | Restore the default text size |
 | `Page Up` / `Page Down` | Move one viewport |
 | `Home` / `End` | Move to the start or end |
-| `Escape` | Cancel recognition or close ClearRead |
+| `Escape` | Return from Compare source, cancel recognition, or close ClearRead |
+
+In **Compare source**, `+` and `-` change pixel magnification, `0` fits the
+image, arrow keys pan, and Escape returns to the reflowed text.
 
 Copying is always explicit. ClearRead never replaces the clipboard merely
 because it recognized text.
+
+ClearRead magnifies words and keeps them wrapped into one reading direction.
+For diagrams, controls, or other visual layout, use Omarchy's native screen
+zoom with `Super + Ctrl + Z`; reset it with `Super + Ctrl + Alt + Z`.
 
 ## Local requirements
 
@@ -96,8 +113,9 @@ Omarchy, Hyprland, Tesseract, or clipboard configuration.
 
 ClearRead is an accessible presentation layer, not an OCR filing cabinet.
 
-- No saved images, text archive, search history, or watched region.
+- No named or saved images, text archive, search history, or watched region.
 - No automatic capture or clipboard watcher.
+- No duplicate live screen magnifier or continuous frame capture.
 - No cloud OCR, translation, summarization, or generated rewriting.
 - No automatic clipboard write.
 - No claim that OCR is exact. The reader labels recognized text so critical

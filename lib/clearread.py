@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import fcntl
 import json
 import math
 import os
@@ -10,10 +11,12 @@ import select
 import selectors
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import time
 import unicodedata
+import zlib
 
 
 MAX_COMMAND_OUTPUT = 1024 * 1024
@@ -23,6 +26,8 @@ MAX_TEXT_BYTES = 1024 * 1024
 MAX_TEXT_CHARACTERS = 120_000
 MAX_COPY_INPUT_BYTES = 1024 * 1024
 MAX_PARAGRAPHS = 512
+MAX_SOURCE_PIXELS = 33_177_600
+MAX_SOURCE_DIMENSION = 32_768
 
 COMMAND_TIMEOUT = 5.0
 CAPTURE_TIMEOUT = 10.0
@@ -31,6 +36,8 @@ COPY_TIMEOUT = 5.0
 TERMINATE_GRACE = 0.4
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+PNG_IHDR = b"IHDR"
+SOURCE_RELEASE = b"release\n"
 GEOMETRY_PATTERN = re.compile(r"^(-?\d+),(-?\d+) (\d+)x(\d+)$")
 LANGUAGE_PATTERN = re.compile(r"^[A-Za-z0-9_]+(?:\+[A-Za-z0-9_]+)*$")
 LIST_PATTERN = re.compile(r"^(?:[-*\u2022\u2023\u25aa\u25e6]|\d+[.)]|[A-Za-z][.)])\s+", re.UNICODE)
@@ -53,6 +60,30 @@ class CommandTimeout(Exception):
 
 class OutputLimitExceeded(Exception):
   pass
+
+
+class SourceLens:
+  def __init__(self, descriptor, width, height):
+    self.descriptor = descriptor
+    self.width = width
+    self.height = height
+    self.closed = False
+
+  def event(self):
+    return {
+      "uri": f"file:///proc/{os.getpid()}/fd/{self.descriptor}",
+      "width": self.width,
+      "height": self.height,
+    }
+
+  def close(self):
+    if self.closed:
+      return
+    try:
+      os.close(self.descriptor)
+    except OSError:
+      pass
+    self.closed = True
 
 
 class CancellationFlag:
@@ -712,6 +743,152 @@ def _monitor_rectangle(monitor):
   return int(x), int(y), logical_width, logical_height
 
 
+def png_dimensions(image):
+  if not isinstance(image, (bytes, bytearray, memoryview)) or len(image) < 33:
+    raise ClearReadError("capture_failed", "The screen capture did not return a valid image.")
+  if bytes(image[:8]) != PNG_SIGNATURE:
+    raise ClearReadError("capture_failed", "The screen capture did not return a valid image.")
+
+  chunk_length = struct.unpack(">I", image[8:12])[0]
+  chunk_type = bytes(image[12:16])
+  chunk_data = bytes(image[16:29])
+  chunk_crc = struct.unpack(">I", image[29:33])[0]
+  if (
+    chunk_length != 13
+    or chunk_type != PNG_IHDR
+    or zlib.crc32(chunk_type + chunk_data) & 0xffffffff != chunk_crc
+  ):
+    raise ClearReadError("capture_failed", "The screen capture did not return a valid image.")
+
+  width, height, bit_depth, colour_type, compression, filtering, interlace = struct.unpack(
+    ">IIBBBBB", chunk_data,
+  )
+  valid_depths = {
+    0: (1, 2, 4, 8, 16),
+    2: (8, 16),
+    3: (1, 2, 4, 8),
+    4: (8, 16),
+    6: (8, 16),
+  }
+  if (
+    width < 1
+    or height < 1
+    or width > 2_147_483_647
+    or height > 2_147_483_647
+    or bit_depth not in valid_depths.get(colour_type, ())
+    or compression != 0
+    or filtering != 0
+    or interlace not in (0, 1)
+  ):
+    raise ClearReadError("capture_failed", "The screen capture did not return a valid image.")
+
+  return width, height
+
+
+def retain_source_image(image):
+  width, height = png_dimensions(image)
+  if (
+    width > MAX_SOURCE_DIMENSION
+    or height > MAX_SOURCE_DIMENSION
+    or width * height > MAX_SOURCE_PIXELS
+    or not sys.platform.startswith("linux")
+  ):
+    return None
+
+  constants = (
+    "MFD_CLOEXEC", "MFD_ALLOW_SEALING",
+  )
+  seal_constants = (
+    "F_ADD_SEALS", "F_GET_SEALS", "F_SEAL_WRITE", "F_SEAL_GROW",
+    "F_SEAL_SHRINK", "F_SEAL_SEAL",
+  )
+  if not hasattr(os, "memfd_create") or not all(hasattr(os, name) for name in constants):
+    return None
+  if not all(hasattr(fcntl, name) for name in seal_constants):
+    return None
+
+  descriptor = None
+  try:
+    flags = os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
+    descriptor = os.memfd_create("clearread-source", flags)
+    view = memoryview(image)
+    offset = 0
+    while offset < len(view):
+      written = os.write(descriptor, view[offset:offset + 1024 * 1024])
+      if written < 1:
+        raise OSError("memfd write made no progress")
+      offset += written
+    os.lseek(descriptor, 0, os.SEEK_SET)
+
+    seals = (
+      fcntl.F_SEAL_WRITE
+      | fcntl.F_SEAL_GROW
+      | fcntl.F_SEAL_SHRINK
+      | fcntl.F_SEAL_SEAL
+    )
+    fcntl.fcntl(descriptor, fcntl.F_ADD_SEALS, seals)
+    installed_seals = fcntl.fcntl(descriptor, fcntl.F_GET_SEALS)
+    descriptor_flags = fcntl.fcntl(descriptor, fcntl.F_GETFD)
+    if installed_seals & seals != seals or not descriptor_flags & fcntl.FD_CLOEXEC:
+      raise OSError("memfd protections were not installed")
+
+    source = SourceLens(descriptor, width, height)
+    descriptor = None
+    return source
+  except OSError:
+    return None
+  finally:
+    if descriptor is not None:
+      try:
+        os.close(descriptor)
+      except OSError:
+        pass
+
+
+def wait_for_source_release(stream):
+  try:
+    descriptor = stream.fileno()
+  except (AttributeError, OSError):
+    while True:
+      if CHILDREN.cancelled.is_set():
+        raise Cancelled()
+      line = stream.readline(4096)
+      if not line or line == SOURCE_RELEASE:
+        return
+
+  candidate = bytearray()
+  discard_line = False
+  release_word = SOURCE_RELEASE[:-1]
+
+  while True:
+    if CHILDREN.cancelled.is_set():
+      raise Cancelled()
+    try:
+      ready, _, _ = select.select([descriptor], [], [], 0.1)
+    except (OSError, ValueError):
+      return
+    if not ready:
+      continue
+    try:
+      chunk = os.read(descriptor, 4096)
+    except OSError:
+      return
+    if not chunk:
+      return
+
+    for character in chunk:
+      if character == ord("\n"):
+        if not discard_line and candidate == release_word:
+          return
+        candidate.clear()
+        discard_line = False
+      elif not discard_line:
+        if len(candidate) < len(release_word):
+          candidate.append(character)
+        else:
+          discard_line = True
+
+
 def capture_png(geometry):
   try:
     return_code, image, _ = run_owned(
@@ -726,8 +903,7 @@ def capture_png(geometry):
 
   if return_code != 0:
     raise ClearReadError("capture_failed", "ClearRead could not capture the selected area.")
-  if not image.startswith(PNG_SIGNATURE):
-    raise ClearReadError("capture_failed", "The screen capture did not return a valid image.")
+  png_dimensions(image)
 
   return image
 
@@ -790,6 +966,7 @@ def capture(mode, omarchy_path, language):
   validate_language(language)
   geometry = None
   frozen_screen = None
+  source = None
 
   try:
     if mode == "region":
@@ -819,15 +996,23 @@ def capture(mode, omarchy_path, language):
         status["monitor"] = monitor
       emit("status", **status)
       text = recognize_image(image, language)
+      source = retain_source_image(image)
       del image
+
+    result = {"mode": mode, "text": text}
+    if monitor:
+      result["monitor"] = monitor
+    if source is not None:
+      result["source"] = source.event()
+    emit("result", **result)
+
+    if source is not None:
+      wait_for_source_release(sys.stdin.buffer)
   finally:
     if frozen_screen is not None:
       frozen_screen.close()
-
-  result = {"mode": mode, "text": text}
-  if monitor:
-    result["monitor"] = monitor
-  emit("result", **result)
+    if source is not None:
+      source.close()
 
 
 def read_copy_request(stream):

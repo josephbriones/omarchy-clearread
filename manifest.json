@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.josephbriones.clearread",
   "name": "ClearRead",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Joseph Briones",
   "description": "Turn visible text into a local, adjustable reading surface.",
   "kinds": [

@@ -4,6 +4,8 @@
 var MAX_DOCUMENT_LENGTH = 120000
 var MAX_PROTOCOL_LIST = 32
 var MAX_REQUEST_ID = 2147483647
+var MAX_SOURCE_PIXELS = 33177600
+var MAX_SOURCE_DIMENSION = 32768
 var STATUS_STATES = ["selecting", "capturing", "recognizing"]
 var MODES = ["window", "region", "clipboard"]
 var FONT_FAMILIES = ["system", "serif", "mono"]
@@ -14,6 +16,9 @@ var WORD_SPACINGS = [0, 4, 8]
 var COLUMN_WIDTHS = ["narrow", "medium", "wide"]
 var PALETTES = ["paper", "sepia", "dark", "contrast"]
 var FOCUS_LINES = [0, 1, 3, 5]
+var MIN_FONT_SIZE = 18
+var MAX_FONT_SIZE = 112
+var MAGNIFICATION_PRESETS = [100, 200, 300, 400]
 
 var DEFAULT_SETTINGS = {
   version: 1,
@@ -179,6 +184,19 @@ function hasOnlyKeys(value, keys) {
   return Object.keys(value).every(function(key) { return keys.indexOf(key) !== -1 })
 }
 
+function sourceDescriptor(value) {
+  if (!plainObject(value) || !hasOnlyKeys(value, ["uri", "width", "height"])
+      || typeof value.uri !== "string"
+      || typeof value.width !== "number" || !isFinite(value.width)
+      || typeof value.height !== "number" || !isFinite(value.height)
+      || Math.floor(value.width) !== value.width || Math.floor(value.height) !== value.height
+      || value.width < 1 || value.width > MAX_SOURCE_DIMENSION
+      || value.height < 1 || value.height > MAX_SOURCE_DIMENSION
+      || value.width * value.height > MAX_SOURCE_PIXELS
+      || !/^file:\/\/\/proc\/[1-9][0-9]{0,9}\/fd\/(?:0|[1-9][0-9]{0,9})$/.test(value.uri)) return null
+  return { uri: value.uri, width: value.width, height: value.height }
+}
+
 function parsePayload(raw, fallbackLanguage) {
   var payload = parseJson(raw)
   return {
@@ -195,7 +213,7 @@ function normalizeSettings(raw) {
   var settings = parseJson(raw)
   return {
     version: 1,
-    fontSize: Math.round(clamp(settings.fontSize === undefined ? DEFAULT_SETTINGS.fontSize : settings.fontSize, 18, 72)),
+    fontSize: normalizeFontSize(settings.fontSize === undefined ? DEFAULT_SETTINGS.fontSize : settings.fontSize),
     fontFamily: choice(settings.fontFamily, FONT_FAMILIES, DEFAULT_SETTINGS.fontFamily),
     fontWeight: choice(settings.fontWeight, FONT_WEIGHTS, DEFAULT_SETTINGS.fontWeight),
     lineHeight: numericChoice(settings.lineHeight, LINE_HEIGHTS, DEFAULT_SETTINGS.lineHeight),
@@ -205,6 +223,15 @@ function normalizeSettings(raw) {
     palette: choice(settings.palette, PALETTES, DEFAULT_SETTINGS.palette),
     focusLines: numericChoice(settings.focusLines, FOCUS_LINES, DEFAULT_SETTINGS.focusLines)
   }
+}
+
+function normalizeFontSize(value) {
+  return Math.round(clamp(value, MIN_FONT_SIZE, MAX_FONT_SIZE))
+}
+
+function fontSizeForMagnification(value) {
+  var magnification = numericChoice(value, MAGNIFICATION_PRESETS, MAGNIFICATION_PRESETS[0])
+  return normalizeFontSize(DEFAULT_SETTINGS.fontSize * magnification / 100)
 }
 
 function settingsJson(settings) {
@@ -311,10 +338,14 @@ function parseEvent(raw) {
   if (type === "result") {
     if (eventRequestId === null || typeof data.text !== "string"
         || (data.monitor !== undefined && typeof data.monitor !== "string")
-        || !hasOnlyKeys(data, ["type", "requestId", "mode", "text", "monitor"]))
+        || !hasOnlyKeys(data, ["type", "requestId", "mode", "text", "monitor", "source"]))
       return { valid: false, type: "result" }
     var resultMode = modeKey(data.mode)
     if (resultMode === "") return { valid: false, type: "result" }
+    var resultSource = data.source === undefined ? null : sourceDescriptor(data.source)
+    if ((data.source !== undefined && resultSource === null)
+        || (resultSource !== null && resultMode === "clipboard"))
+      return { valid: false, type: "result" }
     var resultText = cleanDocument(data.text)
     if (resultText === "") return { valid: false, type: "result" }
     var result = eventBase("result")
@@ -322,6 +353,7 @@ function parseEvent(raw) {
     result.mode = resultMode
     result.text = resultText
     result.monitor = typeof data.monitor === "string" ? cleanLine(data.monitor, 160) : ""
+    result.source = resultSource
     return result
   }
 
@@ -375,6 +407,11 @@ if (typeof module !== "undefined") {
   module.exports = {
     MAX_DOCUMENT_LENGTH: MAX_DOCUMENT_LENGTH,
     MAX_REQUEST_ID: MAX_REQUEST_ID,
+    MAX_SOURCE_PIXELS: MAX_SOURCE_PIXELS,
+    MAX_SOURCE_DIMENSION: MAX_SOURCE_DIMENSION,
+    MIN_FONT_SIZE: MIN_FONT_SIZE,
+    MAX_FONT_SIZE: MAX_FONT_SIZE,
+    MAGNIFICATION_PRESETS: MAGNIFICATION_PRESETS,
     DEFAULT_SETTINGS: DEFAULT_SETTINGS,
     DEMO_DOCUMENT: DEMO_DOCUMENT,
     clamp: clamp,
@@ -386,8 +423,11 @@ if (typeof module !== "undefined") {
     normalizeLanguage: normalizeLanguage,
     modeKey: modeKey,
     requestId: requestId,
+    sourceDescriptor: sourceDescriptor,
     normalizeCapabilities: normalizeCapabilities,
     normalizeSettings: normalizeSettings,
+    normalizeFontSize: normalizeFontSize,
+    fontSizeForMagnification: fontSizeForMagnification,
     settingsJson: settingsJson,
     fontFamilyName: fontFamilyName,
     columnPixels: columnPixels,

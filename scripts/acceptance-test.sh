@@ -92,6 +92,8 @@ elif wanted == "closed":
         state.get("open") is False
         and state.get("running") is False
         and state.get("characters", 0) == 0
+        and state.get("sourceHeld") is False
+        and state.get("sourceView") is False
     )
 elif wanted == "ready":
     ok = (
@@ -105,9 +107,11 @@ elif wanted == "real-reading":
         state.get("open") is True
         and state.get("demo") is False
         and state.get("state") == "reading"
-        and state.get("running") is False
+        and state.get("running") is True
         and state.get("mode") == expected_mode
         and state.get("characters", 0) > 0
+        and state.get("sourceHeld") is True
+        and state.get("sourceView") is True
     )
 else:
     ok = False
@@ -170,11 +174,12 @@ run_real_capture() {
   }
 
   printf '%s\n' "$instruction"
-  printf '%s\n' 'Use generated, non-sensitive fixture text. Return here and press Enter only after the reader appears.'
+  printf '%s\n' 'Use generated, non-sensitive fixture text. When the reader appears, open Compare source, inspect Fit, 2x, and 4x, and leave the source view open.'
+  printf '%s\n' 'Return here and press Enter only after confirming that the pixels match the OCR source.'
   read -r
 
   wait_for_state real-reading "$expected_mode" || {
-    printf 'FAIL: ClearRead did not return a non-empty %s OCR result\n' "$expected_mode" >&2
+    printf 'FAIL: ClearRead did not return a non-empty %s OCR result with a live source view\n' "$expected_mode" >&2
     exit 1
   }
   close_and_verify

@@ -1,9 +1,12 @@
 import contextlib
+import fcntl
 import io
 import json
 import os
 from pathlib import Path
+import re
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
@@ -12,12 +15,45 @@ import threading
 import time
 import unittest
 from unittest import mock
+import zlib
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 
 import clearread
+
+
+def png_chunk(chunk_type, data):
+  return (
+    struct.pack(">I", len(data))
+    + chunk_type
+    + data
+    + struct.pack(">I", zlib.crc32(chunk_type + data) & 0xffffffff)
+  )
+
+
+def png_image(width=800, height=600, trailer=b"local-image-bytes"):
+  data = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+  return (
+    clearread.PNG_SIGNATURE
+    + png_chunk(b"IHDR", data)
+    + trailer
+  )
+
+
+MEMFD_SEALS_SUPPORTED = (
+  sys.platform.startswith("linux")
+  and hasattr(os, "memfd_create")
+  and all(hasattr(os, name) for name in ("MFD_CLOEXEC", "MFD_ALLOW_SEALING"))
+  and all(
+    hasattr(fcntl, name)
+    for name in (
+      "F_ADD_SEALS", "F_GET_SEALS", "F_SEAL_WRITE", "F_SEAL_GROW",
+      "F_SEAL_SHRINK", "F_SEAL_SEAL",
+    )
+  )
+)
 
 
 class ClearReadTests(unittest.TestCase):
@@ -79,7 +115,9 @@ class ClearReadTests(unittest.TestCase):
     self.script(self.fake_bin / "grim", """
       import os
       from pathlib import Path
+      import struct
       import sys
+      import zlib
 
       expected = ["-g", os.environ.get("FAKE_EXPECT_GEOMETRY", "40,50 800x600"), "-"]
       if sys.argv[1:] != expected:
@@ -93,7 +131,23 @@ class ClearReadTests(unittest.TestCase):
         except (ProcessLookupError, ValueError):
           raise SystemExit(66)
         Path(os.environ["FAKE_GRIM_SAW_FREEZE"]).write_text("alive", encoding="ascii")
-      sys.stdout.buffer.write(b"\\x89PNG\\r\\n\\x1a\\n" + b"local-image-bytes")
+      image_file = os.environ.get("FAKE_IMAGE_FILE")
+      if image_file:
+        image = Path(image_file).read_bytes()
+      else:
+        width = int(os.environ.get("FAKE_PNG_WIDTH", "800"))
+        height = int(os.environ.get("FAKE_PNG_HEIGHT", "600"))
+        data = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+        crc = zlib.crc32(b"IHDR" + data) & 0xffffffff
+        image = (
+          b"\\x89PNG\\r\\n\\x1a\\n"
+          + struct.pack(">I", len(data))
+          + b"IHDR"
+          + data
+          + struct.pack(">I", crc)
+          + b"local-image-bytes"
+        )
+      sys.stdout.buffer.write(image)
     """)
 
     self.script(self.fake_bin / "tesseract", """
@@ -213,6 +267,13 @@ class ClearReadTests(unittest.TestCase):
     command_environment = self.environment()
     if environment:
       command_environment.update(environment)
+    if input_bytes is None and "capture" in arguments:
+      try:
+        mode = arguments[arguments.index("--mode") + 1]
+      except (ValueError, IndexError):
+        mode = None
+      if mode in ("window", "region"):
+        input_bytes = clearread.SOURCE_RELEASE
     return subprocess.run(
       self.launcher_command(*arguments),
       input=input_bytes,
@@ -360,7 +421,221 @@ class ClearReadTests(unittest.TestCase):
     self.assertEqual(result["mode"], "window")
     self.assertEqual(result["monitor"], "DP-1")
     self.assertEqual(result["text"], "First wrapped paragraph.\n\n• One continued\n\n• Two")
-    self.assertEqual(set(result), {"type", "mode", "text", "monitor"})
+    self.assertEqual(
+      set(result) - {"source"},
+      {"type", "mode", "text", "monitor"},
+    )
+
+  @unittest.skipUnless(MEMFD_SEALS_SUPPORTED, "requires Linux sealed memfd support")
+  def test_source_lens_retains_exact_sealed_capture_until_exact_release(self):
+    pixels = b"\0\xff\x00\x00\xff\x00\x00\xff\xff"
+    image = png_image(
+      2,
+      1,
+      png_chunk(b"IDAT", zlib.compress(pixels)) + png_chunk(b"IEND", b""),
+    )
+    image_file = self.sandbox / "source.png"
+    image_file.write_bytes(image)
+    environment = self.environment()
+    environment["FAKE_IMAGE_FILE"] = str(image_file)
+    process = subprocess.Popen(
+      self.launcher_command(
+        "capture", "--mode", "window",
+        "--omarchy-path", str(self.omarchy_path),
+        "--language", "eng",
+      ),
+      stdin=subprocess.PIPE,
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+      cwd=self.sandbox,
+      env=environment,
+    )
+
+    source_path = None
+    try:
+      events = [json.loads(process.stdout.readline()) for _ in range(3)]
+      result = events[-1]
+      self.assertEqual(result["type"], "result")
+      source = result["source"]
+      self.assertEqual(set(source), {"uri", "width", "height"})
+      self.assertEqual((source["width"], source["height"]), (2, 1))
+
+      match = re.fullmatch(r"file:///proc/([1-9]\d*)/fd/(\d+)", source["uri"])
+      self.assertIsNotNone(match)
+      self.assertNotEqual(int(match.group(1)), process.pid)
+      source_path = Path(source["uri"][7:])
+      self.assertEqual(source_path.read_bytes(), image)
+
+      descriptor = os.open(source_path, os.O_RDONLY)
+      try:
+        expected_seals = (
+          fcntl.F_SEAL_WRITE
+          | fcntl.F_SEAL_GROW
+          | fcntl.F_SEAL_SHRINK
+          | fcntl.F_SEAL_SEAL
+        )
+        self.assertEqual(fcntl.fcntl(descriptor, fcntl.F_GET_SEALS), expected_seals)
+      finally:
+        os.close(descriptor)
+
+      process.stdin.write(b"release\r\n")
+      process.stdin.flush()
+      time.sleep(0.15)
+      self.assertIsNone(process.poll(), "an inexact release disposed the source")
+
+      process.stdin.write(clearread.SOURCE_RELEASE)
+      process.stdin.flush()
+      process.stdin.close()
+      process.wait(timeout=2)
+      errors = process.stderr.read()
+      self.assertEqual(process.returncode, 0, errors.decode())
+      self.assertFalse(source_path.exists())
+    finally:
+      if process.poll() is None:
+        try:
+          process.stdin.write(clearread.SOURCE_RELEASE)
+          process.stdin.flush()
+        except (BrokenPipeError, OSError, ValueError):
+          pass
+        try:
+          process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+          process.kill()
+          process.wait(timeout=2)
+      for stream in (process.stdin, process.stdout, process.stderr):
+        if stream is not None and not stream.closed:
+          stream.close()
+
+  @unittest.skipUnless(MEMFD_SEALS_SUPPORTED, "requires Linux sealed memfd support")
+  def test_source_lens_cancellation_closes_the_descriptor_promptly(self):
+    process = subprocess.Popen(
+      self.launcher_command(
+        "capture", "--mode", "window",
+        "--omarchy-path", str(self.omarchy_path),
+        "--language", "eng",
+      ),
+      stdin=subprocess.PIPE,
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+      cwd=self.sandbox,
+      env=self.environment(),
+    )
+
+    source_path = None
+    try:
+      result = [json.loads(process.stdout.readline()) for _ in range(3)][-1]
+      source_path = Path(result["source"]["uri"][7:])
+      self.assertTrue(source_path.exists())
+
+      started = time.monotonic()
+      process.send_signal(signal.SIGTERM)
+      process.wait(timeout=2)
+      elapsed = time.monotonic() - started
+      remaining_output = process.stdout.read()
+      errors = process.stderr.read()
+
+      self.assertEqual(process.returncode, 130, errors.decode())
+      self.assertLess(elapsed, 0.75)
+      self.assertEqual(json.loads(remaining_output), {
+        "type": "cancelled",
+        "mode": "window",
+      })
+      self.assertFalse(source_path.exists())
+    finally:
+      if process.poll() is None:
+        process.kill()
+        process.communicate(timeout=2)
+      for stream in (process.stdin, process.stdout, process.stderr):
+        if stream is not None and not stream.closed:
+          stream.close()
+
+  @unittest.skipUnless(MEMFD_SEALS_SUPPORTED, "requires Linux sealed memfd support")
+  def test_launcher_sigkill_releases_a_held_source_descriptor(self):
+    launcher = subprocess.Popen(
+      self.launcher_command(
+        "capture", "--mode", "window",
+        "--omarchy-path", str(self.omarchy_path),
+        "--language", "eng",
+      ),
+      stdin=subprocess.PIPE,
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+      cwd=self.sandbox,
+      env=self.environment(),
+    )
+
+    try:
+      result = [json.loads(launcher.stdout.readline()) for _ in range(3)][-1]
+      source_path = Path(result["source"]["uri"][7:])
+      worker_pid = int(source_path.parts[2])
+      self.assertTrue(source_path.exists())
+      self.assertIsNone(launcher.poll())
+
+      launcher.kill()
+      launcher.wait(timeout=2)
+
+      self.assertEqual(launcher.returncode, -signal.SIGKILL)
+      self.assert_pid_stopped(worker_pid, timeout=3)
+      self.assertFalse(source_path.exists())
+    finally:
+      if launcher.poll() is None:
+        launcher.kill()
+        launcher.wait(timeout=2)
+      for stream in (launcher.stdin, launcher.stdout, launcher.stderr):
+        if stream is not None and not stream.closed:
+          stream.close()
+
+  @unittest.skipUnless(MEMFD_SEALS_SUPPORTED, "requires Linux sealed memfd support")
+  def test_source_lens_stdin_eof_releases_the_descriptor(self):
+    process = subprocess.Popen(
+      self.launcher_command(
+        "capture", "--mode", "window",
+        "--omarchy-path", str(self.omarchy_path),
+        "--language", "eng",
+      ),
+      stdin=subprocess.PIPE,
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+      cwd=self.sandbox,
+      env=self.environment(),
+    )
+
+    try:
+      result = [json.loads(process.stdout.readline()) for _ in range(3)][-1]
+      source_path = Path(result["source"]["uri"][7:])
+      self.assertTrue(source_path.exists())
+
+      process.stdin.close()
+      process.wait(timeout=2)
+
+      errors = process.stderr.read()
+      self.assertEqual(process.returncode, 0, errors.decode())
+      self.assertFalse(source_path.exists())
+    finally:
+      if process.poll() is None:
+        process.kill()
+        process.wait(timeout=2)
+      for stream in (process.stdin, process.stdout, process.stderr):
+        if stream is not None and not stream.closed:
+          stream.close()
+
+  def test_source_lens_omits_oversized_images_and_clipboard_content(self):
+    oversized = self.run_cli(
+      "capture", "--mode", "window",
+      "--omarchy-path", str(self.omarchy_path),
+      "--language", "eng",
+      environment={"FAKE_PNG_WIDTH": "7681", "FAKE_PNG_HEIGHT": "4320"},
+    )
+    clipboard = self.run_cli(
+      "capture", "--mode", "clipboard",
+      "--omarchy-path", str(self.omarchy_path),
+      "--language", "eng",
+    )
+
+    self.assertEqual(oversized.returncode, 0, oversized.stderr.decode())
+    self.assertNotIn("source", self.events(oversized)[-1])
+    self.assertEqual(clipboard.returncode, 0, clipboard.stderr.decode())
+    self.assertNotIn("source", self.events(clipboard)[-1])
 
   def test_region_capture_uses_the_absolute_native_smart_picker(self):
     freeze_pid_file = self.sandbox / "freeze-pid"
@@ -868,6 +1143,73 @@ class ClearReadTests(unittest.TestCase):
     self.assertEqual(process.returncode, 1)
     self.assertEqual(self.events(process)[-1]["code"], "copy_too_large")
 
+  def test_png_dimensions_validates_the_complete_ihdr(self):
+    self.assertEqual(clearread.png_dimensions(png_image(3840, 2160)), (3840, 2160))
+
+    invalid = [
+      clearread.PNG_SIGNATURE,
+      png_image(0, 1),
+      png_image(1, 0),
+      png_image(1, 1)[:29] + b"\0\0\0\0" + png_image(1, 1)[33:],
+    ]
+    bad_colour = bytearray(png_image(1, 1))
+    bad_colour[25] = 5
+    bad_colour[29:33] = struct.pack(
+      ">I", zlib.crc32(bytes(bad_colour[12:29])) & 0xffffffff,
+    )
+    invalid.append(bytes(bad_colour))
+
+    for image in invalid:
+      with self.subTest(length=len(image)):
+        self.assert_error_code("capture_failed", lambda: clearread.png_dimensions(image))
+
+  def test_source_lens_size_limits_precede_memfd_creation(self):
+    for image in (png_image(7681, 4320), png_image(32769, 1), png_image(1, 32769)):
+      with self.subTest(dimensions=clearread.png_dimensions(image)):
+        with mock.patch.object(clearread.os, "memfd_create", create=True) as create:
+          self.assertIsNone(clearread.retain_source_image(image))
+        create.assert_not_called()
+
+  @unittest.skipUnless(MEMFD_SEALS_SUPPORTED, "requires Linux sealed memfd support")
+  def test_source_lens_memfd_failure_is_optional_and_leak_free(self):
+    image = png_image(1, 1)
+    with mock.patch.object(clearread.os, "memfd_create", side_effect=OSError("unsupported")):
+      self.assertIsNone(clearread.retain_source_image(image))
+
+    created = []
+    create_memfd = clearread.os.memfd_create
+
+    def remember_memfd(name, flags):
+      descriptor = create_memfd(name, flags)
+      created.append(descriptor)
+      return descriptor
+
+    with mock.patch.object(clearread.os, "memfd_create", side_effect=remember_memfd):
+      with mock.patch.object(clearread.fcntl, "fcntl", side_effect=OSError("failed")):
+        self.assertIsNone(clearread.retain_source_image(image))
+
+    self.assertEqual(len(created), 1)
+    with self.assertRaises(OSError):
+      os.fstat(created[0])
+
+  @unittest.skipUnless(MEMFD_SEALS_SUPPORTED, "requires Linux sealed memfd support")
+  def test_source_lens_close_is_idempotent_and_does_not_leak_fds(self):
+    before = len(os.listdir("/proc/self/fd"))
+    for _ in range(8):
+      source = clearread.retain_source_image(png_image(1, 1))
+      self.assertIsNotNone(source)
+      self.assertEqual(os.pread(source.descriptor, 4096, 0), png_image(1, 1))
+      descriptor_flags = fcntl.fcntl(source.descriptor, fcntl.F_GETFD)
+      self.assertTrue(descriptor_flags & fcntl.FD_CLOEXEC)
+      descriptor = source.descriptor
+      source.close()
+      source.close()
+      with self.assertRaises(OSError):
+        os.fstat(descriptor)
+    after = len(os.listdir("/proc/self/fd"))
+
+    self.assertEqual(after, before)
+
   def test_capture_failure_family_has_stable_error_codes(self):
     failures = (
       (clearread.CommandTimeout(), "capture_timeout"),
@@ -878,7 +1220,11 @@ class ClearReadTests(unittest.TestCase):
         with mock.patch.object(clearread, "run_owned", side_effect=failure):
           self.assert_error_code(code, lambda: clearread.capture_png("0,0 10x10"))
 
-    for response in ((1, b"", b"failed"), (0, b"not-a-png", b"")):
+    for response in (
+      (1, b"", b"failed"),
+      (0, b"not-a-png", b""),
+      (0, clearread.PNG_SIGNATURE + b"not-an-ihdr", b""),
+    ):
       with self.subTest(response=response[0:2]):
         with mock.patch.object(clearread, "run_owned", return_value=response):
           self.assert_error_code(
