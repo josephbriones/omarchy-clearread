@@ -10,7 +10,7 @@ Hyprland tools, `grim`, `tesseract`, English Tesseract data, `wl-copy`,
 From the installed plugin directory:
 
 ```bash
-./bin/clearread doctor --omarchy-path "${OMARCHY_PATH:-$HOME/.local/share/omarchy}"
+./bin/clearread doctor
 ```
 
 The command prints one JSON object. `ready: true` means at least one reading

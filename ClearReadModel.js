@@ -2,7 +2,6 @@
 // free of QML globals: helper output and persisted settings are untrusted input.
 
 var MAX_DOCUMENT_LENGTH = 120000
-var MAX_PARAGRAPHS = 512
 var MAX_PROTOCOL_LIST = 32
 var MAX_REQUEST_ID = 2147483647
 var STATUS_STATES = ["selecting", "capturing", "recognizing"]
@@ -94,13 +93,17 @@ function ellipsize(text, limit, trimEnd) {
   return prefix + "…"
 }
 
+function stripUnsafeFormatControls(text) {
+  return text.replace(/[\u061c\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff]/g, "")
+}
+
 function cleanLine(value, maximum) {
   var limit = maximum === undefined ? 600 : Math.max(0, Number(maximum) || 0)
   var text = String(value === undefined || value === null ? "" : value)
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
-  return ellipsize(text, limit, false)
+  return ellipsize(stripUnsafeFormatControls(text), limit, false)
 }
 
 function cleanDocument(value, maximum) {
@@ -116,7 +119,7 @@ function cleanDocument(value, maximum) {
     .replace(/\n[ \u00a0]+\n/g, "\n\n")
     .replace(/\n{4,}/g, "\n\n\n")
     .trim()
-  return ellipsize(text, limit, true)
+  return ellipsize(stripUnsafeFormatControls(text), limit, true)
 }
 
 function stringList(value, maximumItems, maximumLength) {
@@ -154,15 +157,26 @@ function modeKey(value) {
   return MODES.indexOf(mode) === -1 ? "" : mode
 }
 
-function normalizeCapabilities(value, fallback) {
+function normalizeCapabilities(value) {
   var source = plainObject(value) ? value : {}
-  var defaultValue = fallback === true
   return {
-    window: typeof source.window === "boolean" ? source.window : defaultValue,
-    region: typeof source.region === "boolean" ? source.region : defaultValue,
-    clipboard: typeof source.clipboard === "boolean" ? source.clipboard : defaultValue,
-    copy: typeof source.copy === "boolean" ? source.copy : defaultValue
+    window: source.window === true,
+    region: source.region === true,
+    clipboard: source.clipboard === true,
+    copy: source.copy === true
   }
+}
+
+function validCapabilities(value) {
+  return plainObject(value)
+    && typeof value.window === "boolean"
+    && typeof value.region === "boolean"
+    && typeof value.clipboard === "boolean"
+    && typeof value.copy === "boolean"
+}
+
+function hasOnlyKeys(value, keys) {
+  return Object.keys(value).every(function(key) { return keys.indexOf(key) !== -1 })
 }
 
 function parsePayload(raw, fallbackLanguage) {
@@ -256,75 +270,80 @@ function parseEvent(raw) {
   var eventRequestId = requestId(data.requestId)
   if (type === "doctor") {
     if (eventRequestId === null || typeof data.ready !== "boolean"
-        || (data.message !== undefined && typeof data.message !== "string")
-        || (data.missing !== undefined && !Array.isArray(data.missing))
-        || (data.issues !== undefined && !Array.isArray(data.issues))
-        || (data.capabilities !== undefined && !plainObject(data.capabilities)))
+        || !Array.isArray(data.missing)
+        || !Array.isArray(data.issues)
+        || !validCapabilities(data.capabilities))
+      return { valid: false, type: "doctor" }
+    if (!hasOnlyKeys(data, ["type", "requestId", "ready", "capabilities", "missing", "issues"]))
+      return { valid: false, type: "doctor" }
+    var capabilities = normalizeCapabilities(data.capabilities)
+    if (data.ready !== (capabilities.window || capabilities.region || capabilities.clipboard))
       return { valid: false, type: "doctor" }
     var doctor = eventBase("doctor")
     doctor.requestId = eventRequestId
     doctor.ready = data.ready
-    doctor.message = cleanLine(data.message, 600)
     doctor.missing = stringList(data.missing, MAX_PROTOCOL_LIST, 120)
     doctor.issues = stringList(data.issues, MAX_PROTOCOL_LIST, 400)
-    doctor.capabilities = normalizeCapabilities(data.capabilities, data.ready)
+    doctor.capabilities = capabilities
     return doctor
   }
 
   if (type === "status") {
     if (eventRequestId === null || typeof data.state !== "string"
-        || STATUS_STATES.indexOf(data.state.toLowerCase()) === -1)
+        || STATUS_STATES.indexOf(data.state.toLowerCase()) === -1
+        || modeKey(data.mode) === ""
+        || (data.monitor !== undefined && typeof data.monitor !== "string")
+        || !hasOnlyKeys(data, ["type", "requestId", "state", "mode", "monitor"]))
       return { valid: false, type: "status" }
-    var statusMode = data.mode === undefined ? "" : modeKey(data.mode)
-    if (data.mode !== undefined && statusMode === "") return { valid: false, type: "status" }
+    var statusState = data.state.toLowerCase()
+    var statusMode = modeKey(data.mode)
+    if ((statusState === "selecting" && statusMode !== "region")
+        || (statusState === "recognizing" && statusMode === "clipboard"))
+      return { valid: false, type: "status" }
     var status = eventBase("status")
     status.requestId = eventRequestId
-    status.state = data.state.toLowerCase()
+    status.state = statusState
     status.mode = statusMode
-    status.message = typeof data.message === "string" ? cleanLine(data.message, 300) : ""
     status.monitor = typeof data.monitor === "string" ? cleanLine(data.monitor, 160) : ""
     return status
   }
 
   if (type === "result") {
-    if (eventRequestId === null || typeof data.text !== "string") return { valid: false, type: "result" }
-    var resultMode = modeKey(data.mode === undefined ? data.source : data.mode)
+    if (eventRequestId === null || typeof data.text !== "string"
+        || (data.monitor !== undefined && typeof data.monitor !== "string")
+        || !hasOnlyKeys(data, ["type", "requestId", "mode", "text", "monitor"]))
+      return { valid: false, type: "result" }
+    var resultMode = modeKey(data.mode)
     if (resultMode === "") return { valid: false, type: "result" }
     var resultText = cleanDocument(data.text)
     if (resultText === "") return { valid: false, type: "result" }
-    if (data.paragraphs !== undefined && !Array.isArray(data.paragraphs))
-      return { valid: false, type: "result" }
     var result = eventBase("result")
     result.requestId = eventRequestId
     result.mode = resultMode
-    result.source = typeof data.source === "string" ? cleanLine(data.source, 80) : resultMode
     result.text = resultText
-    result.paragraphs = stringList(data.paragraphs, MAX_PARAGRAPHS, 4000)
-    result.characters = codePointLength(resultText)
-    result.geometry = data.geometry === undefined ? null : data.geometry
     result.monitor = typeof data.monitor === "string" ? cleanLine(data.monitor, 160) : ""
     return result
   }
 
   if (type === "error") {
     if (eventRequestId === null || typeof data.message !== "string"
-        || (data.code !== undefined && typeof data.code !== "string"))
+        || typeof data.code !== "string"
+        || !hasOnlyKeys(data, ["type", "requestId", "code", "message"]))
       return { valid: false, type: "error" }
     var failure = eventBase("error")
     failure.requestId = eventRequestId
-    failure.code = typeof data.code === "string" ? cleanLine(data.code, 80) : ""
+    failure.code = cleanLine(data.code, 80)
     failure.message = cleanLine(data.message, 600) || "ClearRead could not read that content."
     return failure
   }
 
   if (type === "cancelled") {
-    if (eventRequestId === null) return { valid: false, type: "cancelled" }
-    var cancelledMode = data.mode === undefined ? "" : modeKey(data.mode)
-    if (data.mode !== undefined && cancelledMode === "") return { valid: false, type: "cancelled" }
+    if (eventRequestId === null || modeKey(data.mode) === ""
+        || !hasOnlyKeys(data, ["type", "requestId", "mode"]))
+      return { valid: false, type: "cancelled" }
     var cancelled = eventBase("cancelled")
     cancelled.requestId = eventRequestId
-    cancelled.mode = cancelledMode
-    cancelled.message = typeof data.message === "string" ? cleanLine(data.message, 300) : ""
+    cancelled.mode = modeKey(data.mode)
     return cancelled
   }
 
@@ -355,7 +374,6 @@ function formatCharacterCount(value) {
 if (typeof module !== "undefined") {
   module.exports = {
     MAX_DOCUMENT_LENGTH: MAX_DOCUMENT_LENGTH,
-    MAX_PARAGRAPHS: MAX_PARAGRAPHS,
     MAX_REQUEST_ID: MAX_REQUEST_ID,
     DEFAULT_SETTINGS: DEFAULT_SETTINGS,
     DEMO_DOCUMENT: DEMO_DOCUMENT,

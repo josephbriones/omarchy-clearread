@@ -45,7 +45,9 @@ Explicit Copy follows the normal Wayland clipboard contract. `wl-copy` may
 keep a selection provider after ClearRead exits so the chosen text remains
 pasteable; it ends when another selection replaces it or a clipboard manager
 takes ownership. That narrow, user-requested clipboard lifetime is not part of
-capture or OCR processing.
+capture or OCR processing. Its standard stdin path may create a private
+temporary backing file and unlink it before the provider backgrounds; the
+plugin creates no named clipboard file or history.
 
 ## Capture paths
 
@@ -72,15 +74,18 @@ Tesseract on stdin. Both stages are bounded and no filename exists.
 
 The helper writes one JSON object per line. Events are deliberately small:
 
-- `doctor` reports capability booleans, missing tools, language, and issues;
-- `status` reports `selecting`, `capturing`, or `recognizing`;
-- `result` carries bounded plain text, normalized paragraphs, source, capture
-  geometry, and monitor name;
-- `cancelled` distinguishes an ordinary Escape from a failure; and
+- `doctor` reports exact capability booleans, missing tools, and issues;
+- `status` reports a capture mode plus `selecting`, `capturing`, or
+  `recognizing`, with an optional monitor name;
+- `result` carries a capture mode, bounded plain text, and an optional monitor
+  name;
+- `cancelled` carries the capture mode and distinguishes an ordinary Escape
+  from a failure; and
 - `error` carries a stable code and a bounded human-readable message.
 
-The JavaScript boundary rejects malformed, oversized, or unknown events. QML
-renders every dynamic field with `Text.PlainText`.
+The JavaScript boundary rejects malformed or unknown events and bounds
+oversized text and metadata. QML renders every dynamic field with
+`Text.PlainText`.
 
 ## Reflow
 

@@ -26,6 +26,9 @@ account, analytics record, or network request. The captured image exists only
 long enough to reach Tesseract. Recognized text is discarded from ClearRead
 when the reader closes. Text the user explicitly copied remains on the normal
 Wayland clipboard. Only presentation preferences remain in ClearRead.
+The standard `wl-copy` implementation may use a private, transient unlinked
+backing file while it owns that explicitly requested clipboard selection; it
+does not create ClearRead history or a named plugin file.
 
 ## Try it
 
@@ -125,10 +128,7 @@ Run the portable suite:
 bash scripts/validate.sh
 ```
 
-The tests use fake capture and OCR tools, so they exercise the complete
-in-memory protocol without inspecting the developer's screen. Real Hyprland,
-multi-display, keyboard-focus, and OCR-quality checks remain explicit Omarchy
-acceptance gates; see [Testing](docs/TESTING.md).
+The tests use fake capture and OCR tools, so they exercise the capture, OCR, clipboard, failure, and cleanup protocols without inspecting the developer's screen. Real Hyprland, multi-display, keyboard-focus, and OCR-quality checks remain explicit Omarchy acceptance gates; see [Testing](docs/TESTING.md).
 
 The [architecture](docs/ARCHITECTURE.md) describes the capture boundary and
 process lifecycle. [Security](SECURITY.md) explains the threat model.

@@ -32,7 +32,8 @@ to the marketplace until every applicable item has evidence.
 - [ ] No listener, network request, analytics, capture daemon, or autostart
       exists.
 - [ ] After explicit Copy, the standard `wl-copy` selection provider lifetime
-      is understood and ends on clipboard replacement or manager takeover.
+      and private transient backing behavior are understood; the provider ends
+      on clipboard replacement or manager takeover.
 - [ ] Settings contain only allowlisted presentation preferences.
 
 ## Functional acceptance
@@ -43,7 +44,7 @@ to the marketplace until every applicable item has evidence.
 - [ ] Generated OCR fixture produces the expected normalized text.
 - [ ] Every presentation control changes only presentation and survives reopen.
 - [ ] Explicit Copy works from both keyboard and pointer without placing text
-      in an argument or persistent history.
+      in an argument, named plugin file, or persistent history.
 - [ ] Demo, capture, copy, close, reopen, disable, and hot reload are repeatable.
 
 ## Visual and accessibility acceptance

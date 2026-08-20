@@ -119,6 +119,7 @@ class RepositoryTests(unittest.TestCase):
         self.assertIn("event.requestId !== activeCaptureRequestId", qml)
         self.assertIn("finishedId !== root.activeDoctorRequestId", qml)
         self.assertIn("finishedId !== root.activeCaptureRequestId", qml)
+        self.assertIn("event.mode !== activeMode", qml)
 
     def test_qml_accessibility_controls_keep_native_focus_and_target_size(self):
         qml = (ROOT / "ClearRead.qml").read_text(encoding="utf-8")
@@ -126,7 +127,12 @@ class RepositoryTests(unittest.TestCase):
         self.assertIn("component AccessButton: Button", qml)
         self.assertIn("(44 - fontSize) / 2", qml)
         self.assertIn("target.forceActiveFocus()", qml)
+        self.assertIn("WlrKeyboardFocus.Exclusive", qml)
+        self.assertNotIn("focusPrime", qml)
         self.assertIn("readerFontMetrics.lineSpacing * lineHeight", qml)
+        self.assertIn("Accessible.multiLine: true", qml)
+        self.assertEqual(qml.count("Accessible.role: Accessible.RadioButton"), 8)
+        self.assertEqual(qml.count("Accessible.onToggleAction: clicked()"), 8)
         self.assertIn("String(Quickshell.processId)", qml)
         self.assertEqual(qml.count('"--shell-pid", root.shellProcessId'), 3)
 
@@ -138,6 +144,16 @@ class RepositoryTests(unittest.TestCase):
         self.assertIn("pendingOpen", demo_function)
         self.assertIn("processesBusy()", demo_function)
         self.assertIn("copyStartPending", demo_function)
+
+    def test_pending_reopen_has_one_synchronous_owner(self):
+        qml = (ROOT / "ClearRead.qml").read_text(encoding="utf-8")
+        open_start = qml.index("function open(payloadJson)")
+        open_end = qml.index("function close()", open_start)
+        resume_start = qml.index("function resumePendingOpen()")
+        resume_end = qml.index("function requestReaderFocus()", resume_start)
+        self.assertLess(qml[open_start:open_end].index("if (pendingOpen)"), qml[open_start:open_end].index("if (opened"))
+        self.assertIn("beginOpen(payload)", qml[resume_start:resume_end])
+        self.assertNotIn("Qt.callLater", qml[resume_start:resume_end])
 
     def test_source_has_no_network_client_or_shell_interpolation(self):
         code = "\n".join(
@@ -159,7 +175,9 @@ class RepositoryTests(unittest.TestCase):
             'bash "$ROOT/scripts/validate.sh"',
             'XDG_SESSION_TYPE:-',
             'HYPRLAND_INSTANCE_SIGNATURE:-',
-            'trap cleanup EXIT INT TERM',
+            'trap cleanup EXIT',
+            "trap 'exit 130' INT",
+            "trap 'exit 143' TERM",
             'if [[ ! -t 0 ]]',
             'run_real_capture window',
             'run_real_capture region',

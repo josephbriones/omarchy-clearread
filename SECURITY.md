@@ -20,7 +20,7 @@ The helper:
   leaves the worker time to reap only children it owns;
 - leases the native picker's frozen frame by verified process group and Linux
   pidfd, never by signalling an unverified numeric PID;
-- keeps screen pixels and recognized text out of files and logs;
+- writes no screen pixel or recognized-text file during capture and OCR;
 - binds no socket and opens no network connection; and
 - renders all dynamic QML strings as plain text.
 
@@ -28,7 +28,8 @@ Presentation settings live in a plugin-owned directory. ClearRead never
 changes Omarchy, Hyprland, Tesseract, clipboard, service, or privilege policy.
 An explicit Copy starts the ordinary `wl-copy` selection provider so the
 chosen text stays pasteable until clipboard ownership changes; capture and OCR
-children remain foreground-owned and bounded.
+children remain foreground-owned and bounded. `wl-copy` may use its standard
+private, transient unlinked backing file while serving that selection.
 
 ## Trust boundary
 

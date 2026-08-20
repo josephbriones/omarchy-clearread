@@ -26,7 +26,9 @@ also separate and explicit. ClearRead does not clear or restore the clipboard
 on close. After Copy, `wl-copy` may keep the selected text available through a
 standard Wayland selection provider until the clipboard is replaced or a
 clipboard manager takes ownership. ClearRead starts that lifetime only from
-the visible Copy action.
+the visible Copy action. The standard `wl-copy` implementation may create a
+private temporary backing file and unlink it before the provider backgrounds;
+ClearRead itself creates no named clipboard file or history.
 
 ## After capture
 

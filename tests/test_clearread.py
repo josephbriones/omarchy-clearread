@@ -69,6 +69,8 @@ class ClearReadTests(unittest.TestCase):
       if arguments == ["activewindow", "-j"]:
         sys.stdout.write(os.environ["FAKE_WINDOW_JSON"])
       elif arguments == ["monitors", "-j"]:
+        if os.environ.get("FAKE_MONITORS_FAIL") == "1":
+          raise SystemExit(70)
         sys.stdout.write(os.environ["FAKE_MONITORS_JSON"])
       else:
         raise SystemExit(64)
@@ -131,9 +133,17 @@ class ClearReadTests(unittest.TestCase):
       import os
       from pathlib import Path
       import sys
+      import time
 
       Path(os.environ["FAKE_COPY_TEXT"]).write_bytes(sys.stdin.buffer.read())
       Path(os.environ["FAKE_COPY_ARGS"]).write_text(json.dumps(sys.argv[1:]), encoding="utf-8")
+      provider_file = os.environ.get("FAKE_COPY_PROVIDER_PID")
+      if provider_file:
+        provider = os.fork()
+        if provider == 0:
+          Path(provider_file).write_text(str(os.getpid()), encoding="ascii")
+          time.sleep(10)
+          os._exit(0)
     """)
 
     self.script(self.omarchy_path / "bin" / "omarchy-capture-region", """
@@ -145,6 +155,8 @@ class ClearReadTests(unittest.TestCase):
 
       if sys.argv[1:] != ["smart", "--keep-freeze"]:
         raise SystemExit(64)
+      if os.environ.get("FAKE_PICKER_CRASH") == "1":
+        raise SystemExit(2)
       frozen = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)"],
         stdin=subprocess.DEVNULL,
@@ -222,28 +234,27 @@ class ClearReadTests(unittest.TestCase):
 
   def test_reflow_preserves_paragraphs_lists_and_unicode(self):
     source = "Wrapped\nprose\n\n1. First\ncontinued\n2) Second\n\nمی\u200cروم क्ष\u200dत्र e\u0301"
-    text, paragraphs = clearread.reflow_text(source)
+    text = clearread.reflow_text(source)
 
-    self.assertEqual(paragraphs, [
+    self.assertEqual(text, "\n\n".join([
       "Wrapped prose",
       "1. First continued",
       "2) Second",
       "می\u200cروم क्ष\u200dत्र e\u0301",
-    ])
-    self.assertEqual(text, "\n\n".join(paragraphs))
+    ]))
     self.assertIn("\u200c", text)
     self.assertIn("\u200d", text)
     self.assertIn("\u0301", text)
 
   def test_reflow_keeps_hyphens_without_inventing_or_deleting_characters(self):
-    text, _ = clearread.reflow_text(
+    text = clearread.reflow_text(
       "long-\nterm\n\nAnne-\nMarie\n\nhttps://example.test/a-\nb"
     )
 
     self.assertEqual(text, "long-term\n\nAnne-Marie\n\nhttps://example.test/a-b")
 
   def test_reflow_strips_controls_but_keeps_joiners_and_marks(self):
-    text, _ = clearread.reflow_text("A\x00\u202eB\u200c\u200d\u0301\x85C")
+    text = clearread.reflow_text("A\x00\u202eB\u200c\u200d\u0301\x85C")
 
     self.assertEqual(text, "AB\u200c\u200d\u0301C")
 
@@ -317,6 +328,18 @@ class ClearReadTests(unittest.TestCase):
         dimensions = (400, 600) if transform in (1, 3, 5, 7) else (600, 400)
         self.assertEqual(rectangle, (-20, 30, *dimensions))
 
+  def test_monitor_rectangle_rejects_nonfinite_scaled_dimensions(self):
+    for width, scale in ((1e308, 5e-324), (10**1000, 1), (1000, 10**1000)):
+      with self.subTest(width=width, scale=scale):
+        self.assertIsNone(clearread._monitor_rectangle({
+          "x": 0,
+          "y": 0,
+          "width": width,
+          "height": width,
+          "scale": scale,
+          "transform": 0,
+        }))
+
   def test_window_capture_orders_visibility_sensitive_events_and_returns_text(self):
     process = self.run_cli(
       "capture", "--mode", "window",
@@ -331,13 +354,13 @@ class ClearReadTests(unittest.TestCase):
       ("status", "recognizing"),
       ("result", None),
     ])
+    self.assertEqual(set(events[0]), {"type", "state", "mode"})
+    self.assertEqual(set(events[1]), {"type", "state", "mode", "monitor"})
     result = events[-1]
     self.assertEqual(result["mode"], "window")
-    self.assertEqual(result["source"], "window")
-    self.assertEqual(result["geometry"], "40,50 800x600")
     self.assertEqual(result["monitor"], "DP-1")
     self.assertEqual(result["text"], "First wrapped paragraph.\n\n• One continued\n\n• Two")
-    self.assertEqual(result["characters"], len(result["text"]))
+    self.assertEqual(set(result), {"type", "mode", "text", "monitor"})
 
   def test_region_capture_uses_the_absolute_native_smart_picker(self):
     freeze_pid_file = self.sandbox / "freeze-pid"
@@ -358,7 +381,7 @@ class ClearReadTests(unittest.TestCase):
     self.assertEqual([event.get("state") for event in events[:-1]], [
       "selecting", "capturing", "recognizing",
     ])
-    self.assertEqual(events[-1]["geometry"], "40,50 800x600")
+    self.assertEqual(events[-1]["mode"], "region")
     self.assertEqual(grim_saw_freeze.read_text(encoding="ascii"), "alive")
     self.assert_pid_stopped(int(freeze_pid_file.read_text(encoding="ascii")))
 
@@ -377,6 +400,24 @@ class ClearReadTests(unittest.TestCase):
     ])
     freeze_pid = int((self.sandbox / "freeze-pid").read_text(encoding="ascii"))
     self.assert_pid_stopped(freeze_pid)
+
+  def test_region_picker_crash_is_an_error_not_a_user_cancellation(self):
+    process = self.run_cli(
+      "capture", "--mode", "region",
+      "--omarchy-path", str(self.omarchy_path),
+      "--language", "eng",
+      environment={"FAKE_PICKER_CRASH": "1"},
+    )
+
+    self.assertEqual(process.returncode, 1)
+    self.assertEqual(self.events(process), [
+      {"type": "status", "state": "selecting", "mode": "region"},
+      {
+        "type": "error",
+        "code": "selection_failed",
+        "message": "The region picker returned an invalid selection.",
+      },
+    ])
 
   def test_pidfd_open_failure_never_signals_an_unleased_pid(self):
     with mock.patch.object(clearread.sys, "platform", "linux"):
@@ -402,6 +443,37 @@ class ClearReadTests(unittest.TestCase):
     self.assertEqual(raised.exception.code, "selection_failed")
     close.assert_called_once_with(77)
     send.assert_not_called()
+
+  def test_pidfd_poll_failure_closes_lease_without_signalling(self):
+    with mock.patch.object(clearread.sys, "platform", "linux"):
+      with mock.patch.object(clearread.os, "pidfd_open", create=True, return_value=77):
+        with mock.patch.object(clearread.os, "getpgid", return_value=54321):
+          with mock.patch.object(clearread.select, "select", side_effect=OSError("failed")):
+            with mock.patch.object(clearread.os, "close") as close:
+              with mock.patch.object(clearread.signal, "pidfd_send_signal", create=True) as send:
+                with self.assertRaises(clearread.ClearReadError) as raised:
+                  clearread.FrozenScreen(12345, 54321)
+
+    self.assertEqual(raised.exception.code, "selection_failed")
+    close.assert_called_once_with(77)
+    send.assert_not_called()
+
+  def test_picker_reap_failure_releases_the_verified_freeze(self):
+    picker_group = mock.Mock(pgid=54321)
+    picker_group.reap.side_effect = OSError("failed")
+    frozen_screen = mock.Mock()
+    with mock.patch.object(
+      clearread,
+      "run_owned",
+      return_value=(0, b"12345\n0,0 100x100\n", b"", picker_group),
+    ):
+      with mock.patch.object(clearread, "FrozenScreen", return_value=frozen_screen):
+        with self.assertRaises(clearread.ClearReadError) as raised:
+          clearread.region_geometry(str(self.omarchy_path))
+
+    self.assertEqual(raised.exception.code, "selection_failed")
+    frozen_screen.close.assert_called_once_with()
+    picker_group.terminate.assert_called_once_with()
 
   def test_picker_rejects_stale_freeze_pid_without_signalling_it(self):
     unrelated = subprocess.Popen(
@@ -682,8 +754,23 @@ class ClearReadTests(unittest.TestCase):
     self.assertEqual([event["type"] for event in events], ["status", "result"])
     self.assertEqual(events[0]["state"], "capturing")
     self.assertEqual(events[-1]["text"], "Existing clipboard\n\n• Item")
-    self.assertIsNone(events[-1]["geometry"])
-    self.assertEqual(events[-1]["monitor"], "DP-1")
+    self.assertEqual(set(events[-1]), {"type", "mode", "text"})
+
+  def test_monitor_metadata_never_blocks_valid_text(self):
+    for mode in ("window", "clipboard"):
+      with self.subTest(mode=mode):
+        process = self.run_cli(
+          "capture", "--mode", mode,
+          "--omarchy-path", str(self.omarchy_path),
+          "--language", "eng",
+          environment={"FAKE_MONITORS_FAIL": "1"},
+        )
+
+        self.assertEqual(process.returncode, 0, process.stderr.decode())
+        result = self.events(process)[-1]
+        self.assertEqual(result["type"], "result")
+        self.assertNotEqual(result["text"], "")
+        self.assertNotIn("monitor", result)
 
   def test_copy_reads_one_bounded_json_line_and_uses_sensitive_plain_text(self):
     copied_text = self.sandbox / "copied-text"
@@ -702,9 +789,73 @@ class ClearReadTests(unittest.TestCase):
     self.assertEqual(json.loads(copied_args.read_text(encoding="utf-8")), [
       "--type", "text/plain", "--sensitive",
     ])
-    self.assertEqual(self.events(process), [
-      {"type": "result", "operation": "copy", "characters": 17},
-    ])
+    self.assertEqual(self.events(process), [])
+
+  def test_copy_returns_after_wl_copy_backgrounds_its_selection_provider(self):
+    copied_text = self.sandbox / "provider-copy-text"
+    copied_args = self.sandbox / "provider-copy-args"
+    provider_pid_file = self.sandbox / "provider-pid"
+    provider_pid = None
+    started = time.monotonic()
+
+    try:
+      process = self.run_cli(
+        "copy",
+        input_bytes=b'{"text":"Pasteable"}\n',
+        environment={
+          "FAKE_COPY_TEXT": str(copied_text),
+          "FAKE_COPY_ARGS": str(copied_args),
+          "FAKE_COPY_PROVIDER_PID": str(provider_pid_file),
+        },
+      )
+      elapsed = time.monotonic() - started
+
+      deadline = time.monotonic() + 2
+      while not provider_pid_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+      self.assertTrue(provider_pid_file.exists(), "clipboard provider did not start")
+      provider_pid = int(provider_pid_file.read_text(encoding="ascii"))
+      self.assertEqual(process.returncode, 0, process.stderr.decode())
+      self.assertLess(elapsed, clearread.COPY_TIMEOUT)
+      self.assertTrue(self.pid_is_running(provider_pid))
+    finally:
+      if provider_pid is not None:
+        try:
+          os.kill(provider_pid, signal.SIGKILL)
+        except ProcessLookupError:
+          pass
+        self.assert_pid_stopped(provider_pid)
+
+  def test_copy_waiting_for_input_stops_on_launcher_termination(self):
+    environment = self.environment()
+    process = subprocess.Popen(
+      self.launcher_command("copy"),
+      stdin=subprocess.PIPE,
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+      cwd=self.sandbox,
+      env=environment,
+    )
+
+    try:
+      time.sleep(0.2)
+      process.send_signal(signal.SIGTERM)
+      process.wait(timeout=2)
+    finally:
+      if process.poll() is None:
+        process.kill()
+        process.wait(timeout=2)
+      process.stdin.close()
+    output = process.stdout.read()
+    errors = process.stderr.read()
+    process.stdout.close()
+    process.stderr.close()
+
+    self.assertEqual(process.returncode, 130, errors.decode())
+    self.assertEqual(json.loads(output.decode("utf-8")), {
+      "type": "cancelled",
+      "mode": None,
+    })
 
   def test_copy_rejects_invalid_and_oversized_requests_before_wl_copy(self):
     for request in (b"not-json\n", b"[]\n", b'{"other":"text"}\n'):
@@ -749,6 +900,7 @@ class ClearReadTests(unittest.TestCase):
     responses = (
       ((1, b"", b"failed"), "recognition_failed"),
       ((0, b" \n\t", b""), "no_text"),
+      ((0, "\u202e".encode("utf-8"), b""), "no_text"),
       ((0, b"\xff", b""), "invalid_text"),
     )
     for response, code in responses:
@@ -771,6 +923,7 @@ class ClearReadTests(unittest.TestCase):
     responses = (
       ((1, b"", b"failed"), "clipboard_unavailable"),
       ((0, b" \n\t", b""), "no_text"),
+      ((0, "\u202e".encode("utf-8"), b""), "no_text"),
       ((0, b"\xff", b""), "invalid_text"),
     )
     for response, code in responses:
@@ -782,7 +935,6 @@ class ClearReadTests(unittest.TestCase):
     request = json.dumps({"text": "Copy me"}).encode("utf-8") + b"\n"
     failures = (
       (clearread.CommandTimeout(), "copy_timeout"),
-      (clearread.OutputLimitExceeded(), "copy_failed"),
       ((1, b"", b"failed"), "copy_failed"),
     )
     for failure, code in failures:
@@ -809,13 +961,32 @@ class ClearReadTests(unittest.TestCase):
       "picker_unavailable", lambda: clearread.region_geometry(str(self.sandbox / "missing")),
     )
 
+  def test_pathological_json_maps_to_stable_errors(self):
+    with mock.patch.object(clearread, "run_owned", return_value=(0, b"{}", b"")):
+      with mock.patch.object(clearread.json, "loads", side_effect=RecursionError()):
+        self.assert_error_code(
+          "monitor_unavailable",
+          lambda: clearread._json_command(
+            ["hyprctl", "monitors", "-j"],
+            "monitor_unavailable",
+            "ClearRead could not inspect the connected monitors.",
+          ),
+        )
+
+    request = mock.Mock(buffer=io.BytesIO(b'{"text":"safe"}\n'))
+    with mock.patch.object(clearread.sys, "stdin", request):
+      with mock.patch.object(clearread.json, "loads", side_effect=RecursionError()):
+        self.assert_error_code("invalid_copy_request", clearread.copy_text)
+
   def test_doctor_reports_bounded_language_aware_capabilities(self):
     environment = self.environment()
     output = io.StringIO()
     with mock.patch.object(clearread.sys, "platform", "linux"):
-      with mock.patch.dict(os.environ, environment, clear=True):
-        with contextlib.redirect_stdout(output):
-          return_code = clearread.doctor(str(self.omarchy_path), "eng+spa")
+      with mock.patch.object(clearread.os, "pidfd_open", create=True):
+        with mock.patch.object(clearread.signal, "pidfd_send_signal", create=True):
+          with mock.patch.dict(os.environ, environment, clear=True):
+            with contextlib.redirect_stdout(output):
+              return_code = clearread.doctor(str(self.omarchy_path), "eng+spa")
 
     self.assertEqual(return_code, 0)
     event = json.loads(output.getvalue())
@@ -827,16 +998,19 @@ class ClearReadTests(unittest.TestCase):
       "copy": True,
     })
     self.assertEqual(event["missing"], [])
-    self.assertLessEqual(len(event["checks"]), 16)
+    self.assertNotIn("checks", event)
+    self.assertEqual(set(event), {"type", "ready", "capabilities", "missing", "issues"})
 
   def test_doctor_keeps_clipboard_available_when_ocr_language_is_missing(self):
     environment = self.environment()
     environment["FAKE_LANGUAGES"] = "eng"
     output = io.StringIO()
     with mock.patch.object(clearread.sys, "platform", "linux"):
-      with mock.patch.dict(os.environ, environment, clear=True):
-        with contextlib.redirect_stdout(output):
-          return_code = clearread.doctor(str(self.omarchy_path), "spa")
+      with mock.patch.object(clearread.os, "pidfd_open", create=True):
+        with mock.patch.object(clearread.signal, "pidfd_send_signal", create=True):
+          with mock.patch.dict(os.environ, environment, clear=True):
+            with contextlib.redirect_stdout(output):
+              return_code = clearread.doctor(str(self.omarchy_path), "spa")
 
     event = json.loads(output.getvalue())
     self.assertEqual(return_code, 0)
@@ -845,6 +1019,23 @@ class ClearReadTests(unittest.TestCase):
     self.assertFalse(event["capabilities"]["region"])
     self.assertTrue(event["capabilities"]["clipboard"])
     self.assertIn("tesseract-language:spa", event["missing"])
+
+  def test_doctor_does_not_require_hyprctl_for_clipboard_reading(self):
+    (self.fake_bin / "hyprctl").chmod(0o644)
+    environment = self.environment()
+    output = io.StringIO()
+    with mock.patch.object(clearread.sys, "platform", "linux"):
+      with mock.patch.object(clearread.os, "pidfd_open", create=True):
+        with mock.patch.object(clearread.signal, "pidfd_send_signal", create=True):
+          with mock.patch.dict(os.environ, environment, clear=True):
+            with contextlib.redirect_stdout(output):
+              return_code = clearread.doctor(str(self.omarchy_path), "eng")
+
+    event = json.loads(output.getvalue())
+    self.assertEqual(return_code, 0)
+    self.assertFalse(event["capabilities"]["window"])
+    self.assertFalse(event["capabilities"]["region"])
+    self.assertTrue(event["capabilities"]["clipboard"])
 
   def test_owned_commands_use_parent_death_signal_wrapper_on_linux(self):
     log = self.sandbox / "setpriv-log"
@@ -1159,6 +1350,20 @@ class ClearReadTests(unittest.TestCase):
     with mock.patch.dict(os.environ, self.environment(), clear=True):
       with self.assertRaises(clearread.OutputLimitExceeded):
         clearread.run_owned(["spam"], timeout=1, stdout_limit=32)
+    self.assertEqual(clearread.CHILDREN.processes, set())
+
+  def test_selector_setup_failure_stops_the_spawned_child(self):
+    self.script(self.fake_bin / "quiet-hang", """
+      import time
+      time.sleep(10)
+    """)
+
+    with mock.patch.dict(os.environ, self.environment(), clear=True):
+      with mock.patch.object(clearread.selectors, "DefaultSelector", side_effect=OSError("failed")):
+        with self.assertRaises(clearread.ClearReadError) as raised:
+          clearread.run_owned(["quiet-hang"], timeout=1)
+
+    self.assertEqual(raised.exception.code, "process_failed")
     self.assertEqual(clearread.CHILDREN.processes, set())
 
   def test_capture_creates_no_image_text_or_history_artifact(self):

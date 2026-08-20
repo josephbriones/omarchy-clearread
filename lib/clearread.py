@@ -115,7 +115,7 @@ class FrozenScreen:
       try:
         pid_pgid = os.getpgid(pid)
         exited = bool(select.select([pidfd], [], [], 0)[0])
-      except (ProcessLookupError, PermissionError) as error:
+      except OSError as error:
         os.close(pidfd)
         raise ClearReadError(
           "selection_failed",
@@ -271,7 +271,8 @@ def arm_parent_death_signal(expected_parent=None):
 
 
 def run_owned(argv, *, input_bytes=None, timeout=None, stdout_limit=MAX_COMMAND_OUTPUT,
-              stderr_limit=MAX_ERROR_OUTPUT, return_process_group=False):
+              stderr_limit=MAX_ERROR_OUTPUT, return_process_group=False,
+              capture_output=True):
   if CHILDREN.cancelled.is_set():
     raise Cancelled()
 
@@ -286,15 +287,15 @@ def run_owned(argv, *, input_bytes=None, timeout=None, stdout_limit=MAX_COMMAND_
     process = subprocess.Popen(
       _owned_argv(argv),
       stdin=stdin,
-      stdout=subprocess.PIPE,
-      stderr=subprocess.PIPE,
+      stdout=subprocess.PIPE if capture_output else subprocess.DEVNULL,
+      stderr=subprocess.PIPE if capture_output else subprocess.DEVNULL,
       start_new_session=True,
     )
   except FileNotFoundError as error:
     raise ClearReadError("dependency_missing", f"Required command is unavailable: {error.filename}") from error
 
   CHILDREN.add(process)
-  selector = selectors.DefaultSelector()
+  selector = None
   output = bytearray()
   errors = bytearray()
   started = time.monotonic()
@@ -304,7 +305,10 @@ def run_owned(argv, *, input_bytes=None, timeout=None, stdout_limit=MAX_COMMAND_
   deferred_group = False
 
   try:
+    selector = selectors.DefaultSelector()
     for stream, label in ((process.stdout, "stdout"), (process.stderr, "stderr")):
+      if stream is None:
+        continue
       os.set_blocking(stream.fileno(), False)
       selector.register(stream, selectors.EVENT_READ, label)
 
@@ -384,8 +388,13 @@ def run_owned(argv, *, input_bytes=None, timeout=None, stdout_limit=MAX_COMMAND_
     _stop_process(process)
     stopped = True
     raise
+  except OSError as error:
+    _stop_process(process)
+    stopped = True
+    raise ClearReadError("process_failed", "A local ClearRead helper failed.") from error
   finally:
-    selector.close()
+    if selector is not None:
+      selector.close()
     for stream in (process.stdin, process.stdout, process.stderr):
       if stream is not None and not stream.closed:
         stream.close()
@@ -488,7 +497,7 @@ def reflow_text(value):
   if len(text) > MAX_TEXT_CHARACTERS:
     raise ClearReadError("text_too_large", "The capture contains too much text to read safely.")
 
-  return text, paragraphs
+  return text
 
 
 def decode_text(data, source):
@@ -512,7 +521,7 @@ def _json_command(argv, code, message):
 
   try:
     return json.loads(output.decode("utf-8"))
-  except (UnicodeDecodeError, json.JSONDecodeError) as error:
+  except (UnicodeDecodeError, ValueError, RecursionError) as error:
     raise ClearReadError(code, message) from error
 
 
@@ -572,11 +581,16 @@ def region_geometry(omarchy_path):
       frozen_screen = FrozenScreen(freeze_pid, picker_group.pgid)
 
     if frozen_screen is None:
-      if return_code != 0 and not lines:
-        raise Cancelled()
       raise ClearReadError("selection_failed", "The region picker returned an invalid selection.")
 
-    picker_group.reap()
+    try:
+      picker_group.reap()
+    except OSError as error:
+      frozen_screen.close()
+      raise ClearReadError(
+        "selection_failed",
+        "Omarchy's frozen-screen process ended before capture.",
+      ) from error
     picker_group = None
 
     if return_code != 0:
@@ -657,7 +671,8 @@ def _monitor_rectangle(monitor):
   if not all(
     isinstance(value, (int, float))
     and not isinstance(value, bool)
-    and math.isfinite(value)
+    and value == value
+    and value not in (math.inf, -math.inf)
     for value in values
   ):
     return None
@@ -667,14 +682,28 @@ def _monitor_rectangle(monitor):
   if (
     not isinstance(scale, (int, float))
     or isinstance(scale, bool)
-    or not math.isfinite(scale)
+    or scale != scale
+    or scale in (math.inf, -math.inf)
     or scale <= 0
   ):
     return None
 
   x, y, width, height = values
-  logical_width = int(width / scale)
-  logical_height = int(height / scale)
+  try:
+    scaled_width = width / scale
+    scaled_height = height / scale
+  except OverflowError:
+    return None
+  if (
+    scaled_width != scaled_width
+    or scaled_height != scaled_height
+    or scaled_width in (math.inf, -math.inf)
+    or scaled_height in (math.inf, -math.inf)
+  ):
+    return None
+
+  logical_width = int(scaled_width)
+  logical_height = int(scaled_height)
   if transform in (1, 3, 5, 7):
     logical_width, logical_height = logical_height, logical_width
   if logical_width < 1 or logical_height < 1:
@@ -728,7 +757,10 @@ def recognize_image(image, language):
   if not text.strip():
     raise ClearReadError("no_text", "No readable text was found in the selected area.")
 
-  return decode_text(text, "Tesseract")
+  decoded = decode_text(text, "Tesseract")
+  if not decoded:
+    raise ClearReadError("no_text", "No readable text was found in the selected area.")
+  return decoded
 
 
 def capture_clipboard():
@@ -748,7 +780,10 @@ def capture_clipboard():
   if not text.strip():
     raise ClearReadError("no_text", "The clipboard does not contain readable text.")
 
-  return decode_text(text, "The clipboard")
+  decoded = decode_text(text, "The clipboard")
+  if not decoded:
+    raise ClearReadError("no_text", "The clipboard does not contain readable text.")
+  return decoded
 
 
 def capture(mode, omarchy_path, language):
@@ -765,40 +800,69 @@ def capture(mode, omarchy_path, language):
     elif mode != "clipboard":
       raise ClearReadError("invalid_mode", "ClearRead received an unsupported capture mode.")
 
-    emit("status", state="capturing", mode=mode, geometry=geometry)
+    emit("status", state="capturing", mode=mode)
 
     if mode == "clipboard":
-      monitors = monitor_data()
-      monitor = focused_monitor(monitors)
-      text, paragraphs = capture_clipboard()
+      monitor = None
+      text = capture_clipboard()
     else:
       image = capture_png(geometry)
       if frozen_screen is not None:
         frozen_screen.close()
         frozen_screen = None
-      monitors = monitor_data()
-      monitor = monitor_for_geometry(monitors, geometry)
-      emit("status", state="recognizing", mode=mode, geometry=geometry, monitor=monitor)
-      text, paragraphs = recognize_image(image, language)
+      try:
+        monitor = monitor_for_geometry(monitor_data(), geometry)
+      except ClearReadError:
+        monitor = None
+      status = {"state": "recognizing", "mode": mode}
+      if monitor:
+        status["monitor"] = monitor
+      emit("status", **status)
+      text = recognize_image(image, language)
       del image
   finally:
     if frozen_screen is not None:
       frozen_screen.close()
 
-  emit(
-    "result",
-    source=mode,
-    mode=mode,
-    text=text,
-    paragraphs=paragraphs,
-    characters=len(text),
-    geometry=geometry,
-    monitor=monitor,
-  )
+  result = {"mode": mode, "text": text}
+  if monitor:
+    result["monitor"] = monitor
+  emit("result", **result)
+
+
+def read_copy_request(stream):
+  try:
+    descriptor = stream.fileno()
+  except (AttributeError, OSError):
+    return stream.readline(MAX_COPY_INPUT_BYTES + 1)
+
+  data = bytearray()
+  deadline = time.monotonic() + COMMAND_TIMEOUT
+  while True:
+    if CHILDREN.cancelled.is_set():
+      raise Cancelled()
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+      raise ClearReadError("invalid_copy_request", "ClearRead did not receive text to copy.")
+    ready, _, _ = select.select([descriptor], [], [], min(0.1, remaining))
+    if not ready:
+      continue
+
+    chunk = os.read(descriptor, min(64 * 1024, MAX_COPY_INPUT_BYTES - len(data) + 1))
+    if not chunk:
+      return bytes(data)
+
+    newline = chunk.find(b"\n")
+    data.extend(chunk if newline == -1 else chunk[:newline + 1])
+    if len(data) > MAX_COPY_INPUT_BYTES:
+      return bytes(data)
+    if newline != -1:
+      return bytes(data)
 
 
 def copy_text():
-  line = sys.stdin.buffer.readline(MAX_COPY_INPUT_BYTES + 1)
+  line = read_copy_request(sys.stdin.buffer)
   if len(line) > MAX_COPY_INPUT_BYTES:
     raise ClearReadError("copy_too_large", "The text is too large to copy safely.")
   if not line:
@@ -806,7 +870,7 @@ def copy_text():
 
   try:
     request = json.loads(line.decode("utf-8"))
-  except (UnicodeDecodeError, json.JSONDecodeError) as error:
+  except (UnicodeDecodeError, ValueError, RecursionError) as error:
     raise ClearReadError("invalid_copy_request", "ClearRead received an invalid copy request.") from error
 
   text = request.get("text") if isinstance(request, dict) else None
@@ -822,31 +886,21 @@ def copy_text():
       ["wl-copy", "--type", "text/plain", "--sensitive"],
       input_bytes=encoded,
       timeout=COPY_TIMEOUT,
-      stdout_limit=4096,
+      capture_output=False,
     )
   except CommandTimeout as error:
     raise ClearReadError("copy_timeout", "Copying did not finish in time.") from error
-  except OutputLimitExceeded as error:
-    raise ClearReadError("copy_failed", "The clipboard command returned an invalid response.") from error
 
   if return_code != 0:
     raise ClearReadError("copy_failed", "ClearRead could not copy the text.")
-
-  emit("result", operation="copy", characters=len(text))
 
 
 def doctor(omarchy_path, language):
   missing = []
   issues = []
-  checks = []
-
-  def check(name, ok, message):
-    checks.append({"name": name, "ok": bool(ok), "message": message})
 
   linux = sys.platform.startswith("linux")
   wayland = bool(os.environ.get("WAYLAND_DISPLAY"))
-  check("linux", linux, "Linux is required." if not linux else "Linux is available.")
-  check("wayland", wayland, "A Wayland session is required." if not wayland else "Wayland is available.")
   if not linux:
     issues.append("ClearRead requires Linux.")
   if not wayland:
@@ -855,7 +909,6 @@ def doctor(omarchy_path, language):
   commands = {}
   for command in ("setpriv", "hyprctl", "grim", "tesseract", "wl-paste", "wl-copy"):
     commands[command] = shutil.which(command) is not None
-    check(command, commands[command], f"{command} is {'available' if commands[command] else 'missing'}.")
     if not commands[command]:
       missing.append(command)
 
@@ -865,7 +918,6 @@ def doctor(omarchy_path, language):
     picker = picker_path.is_file() and os.access(picker_path, os.X_OK)
   else:
     issues.append("Omarchy did not provide an absolute runtime path.")
-  check("region_picker", picker, "Omarchy's region picker is available." if picker else "Omarchy's region picker is missing.")
   if not picker:
     missing.append("omarchy-capture-region")
 
@@ -898,13 +950,15 @@ def doctor(omarchy_path, language):
       language_ok = False
       issues.append("ClearRead could not inspect the installed Tesseract languages.")
 
-  check("language", language_ok, f"OCR language is {language}." if language_ok else "OCR language is unavailable.")
-
   session = linux and wayland
+  pidfd = not linux or (hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"))
+  if not pidfd:
+    missing.append("python-pidfd")
+    issues.append("Python cannot safely own Omarchy's frozen-screen process.")
   capabilities = {
     "window": session and commands["setpriv"] and commands["hyprctl"] and commands["grim"] and commands["tesseract"] and language_ok,
-    "region": session and commands["setpriv"] and commands["hyprctl"] and commands["grim"] and commands["tesseract"] and picker and language_ok,
-    "clipboard": session and commands["setpriv"] and commands["hyprctl"] and commands["wl-paste"],
+    "region": session and pidfd and commands["setpriv"] and commands["hyprctl"] and commands["grim"] and commands["tesseract"] and picker and language_ok,
+    "clipboard": session and commands["setpriv"] and commands["wl-paste"],
     "copy": session and commands["setpriv"] and commands["wl-copy"],
   }
   ready = capabilities["window"] or capabilities["region"] or capabilities["clipboard"]
@@ -915,7 +969,6 @@ def doctor(omarchy_path, language):
     capabilities=capabilities,
     missing=missing[:16],
     issues=issues[:16],
-    checks=checks[:16],
   )
   return 0 if ready else 1
 

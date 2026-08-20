@@ -26,3 +26,29 @@ jobs:
           node-version: "22"
       - name: Validate
         run: bash scripts/validate.sh
+
+  omarchy-contract:
+    name: Omarchy QML contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container: archlinux:latest
+    steps:
+      - name: Install the current Arch QML toolchain
+        run: pacman -Syu --noconfirm git jq quickshell qt6-declarative
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: plugin
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: basecamp/omarchy
+          ref: 945549699026df6c888a6b1bd4e06fbf55a67595
+          path: omarchy
+      - name: Validate manifest and QML imports
+        working-directory: plugin
+        env:
+          OMARCHY_PATH: ${{ github.workspace }}/omarchy
+        run: |
+          "$OMARCHY_PATH/bin/omarchy-plugin-validate" .
+          mkdir -p "$RUNNER_TEMP/clearread-qml"
+          ln -s "$OMARCHY_PATH/shell" "$RUNNER_TEMP/clearread-qml/qs"
+          /usr/lib/qt6/bin/qmllint -I "$RUNNER_TEMP/clearread-qml" ClearRead.qml

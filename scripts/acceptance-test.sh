@@ -48,7 +48,9 @@ fi
 cleanup() {
   omarchy-shell shell hide "$PLUGIN_ID" >/dev/null 2>&1 || true
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 plugin_call() {
   omarchy-shell "$PLUGIN_ID" "$@"

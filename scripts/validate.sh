@@ -20,7 +20,6 @@ require_command node
 
 say "==> Repository and manifest"
 python3 -m json.tool manifest.json >/dev/null
-python3 -m unittest tests.test_repository -v
 
 say "==> Python syntax and tests"
 python3 -m py_compile lib/clearread.py bin/clearread

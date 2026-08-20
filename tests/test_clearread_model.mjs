@@ -44,6 +44,7 @@ test("document cleaning preserves reflow and strips unsafe controls", () => {
     "First line\ncontinues\n\n\nSecond paragraph."
   )
   assert.equal(model.cleanDocument("A\tB"), "A    B")
+  assert.equal(model.cleanDocument("A\u202eB\u200c\u200d"), "AB\u200c\u200d")
   assert.equal(model.cleanDocument({ unsafe: true }), "")
   assert.equal(model.cleanDocument("abcdef", 4), "abc…")
   assert.equal(model.cleanDocument("A😀BCD", 4), "A😀B…")
@@ -53,6 +54,7 @@ test("document cleaning preserves reflow and strips unsafe controls", () => {
 
 test("single-line diagnostics cannot inject controls or grow without bound", () => {
   assert.equal(model.cleanLine("  one\u0000\n two  "), "one two")
+  assert.equal(model.cleanLine("safe\u202evalue\u200c"), "safevalue\u200c")
   assert.equal(model.cleanLine("abcdef", 4), "abc…")
   assert.equal(model.cleanLine("abc", 0), "")
   assert.equal(model.cleanLine(null), "")
@@ -145,6 +147,20 @@ test("doctor events normalize the exact backend boundary", () => {
   assert.deepEqual(doctor.issues, ["local only"])
   assert.deepEqual(model.parseEvent({ type: "doctor", ready: "yes" }), { valid: false, type: "doctor" })
   assert.deepEqual(model.parseEvent({ type: "doctor", requestId: 7, ready: false, capabilities: [] }), { valid: false, type: "doctor" })
+  assert.deepEqual(model.parseEvent({ type: "doctor", requestId: 7, ready: true }), { valid: false, type: "doctor" })
+  assert.deepEqual(model.parseEvent({
+    type: "doctor", requestId: 7, ready: true,
+    capabilities: { window: true, region: true, clipboard: true }
+  }), { valid: false, type: "doctor" })
+  assert.deepEqual(model.parseEvent({
+    type: "doctor", requestId: 7, ready: true,
+    capabilities: { window: true, region: false, clipboard: false, copy: true },
+    missing: [], issues: [], surprise: true
+  }), { valid: false, type: "doctor" })
+  assert.deepEqual(model.parseEvent({
+    type: "doctor", requestId: 7, ready: true,
+    capabilities: { window: false, region: false, clipboard: false, copy: true }
+  }), { valid: false, type: "doctor" })
 })
 
 test("doctor capabilities expose only canonical boolean actions", () => {
@@ -154,9 +170,9 @@ test("doctor capabilities expose only canonical boolean actions", () => {
     clipboard: false,
     copy: true,
     remote: true
-  }, false), { window: true, region: false, clipboard: false, copy: true })
-  assert.deepEqual(model.normalizeCapabilities(undefined, true), {
-    window: true, region: true, clipboard: true, copy: true
+  }), { window: true, region: false, clipboard: false, copy: true })
+  assert.deepEqual(model.normalizeCapabilities(undefined), {
+    window: false, region: false, clipboard: false, copy: false
   })
 })
 
@@ -167,14 +183,17 @@ test("capture lifecycle accepts only known status states and modes", () => {
     requestId: 8,
     state: "selecting",
     mode: "region",
-    message: "",
     monitor: ""
   })
   assert.equal(model.parseEvent({ type: "status", requestId: 8, state: "capturing", mode: "window" }).valid, true)
-  assert.equal(model.parseEvent({ type: "status", requestId: 8, state: "recognizing", mode: "clipboard" }).valid, true)
+  assert.equal(model.parseEvent({ type: "status", requestId: 8, state: "capturing", mode: "clipboard" }).valid, true)
   assert.equal(model.parseEvent({ type: "status", requestId: 8, state: "recognizing", mode: "region", monitor: "DP-2" }).monitor, "DP-2")
   assert.deepEqual(model.parseEvent({ type: "status", requestId: 8, state: "uploading", mode: "region" }), { valid: false, type: "status" })
   assert.deepEqual(model.parseEvent({ type: "status", requestId: 8, state: "capturing", mode: "desktop" }), { valid: false, type: "status" })
+  assert.deepEqual(model.parseEvent({ type: "status", requestId: 8, state: "capturing" }), { valid: false, type: "status" })
+  assert.deepEqual(model.parseEvent({ type: "status", requestId: 8, state: "selecting", mode: "window" }), { valid: false, type: "status" })
+  assert.deepEqual(model.parseEvent({ type: "status", requestId: 8, state: "recognizing", mode: "clipboard" }), { valid: false, type: "status" })
+  assert.deepEqual(model.parseEvent({ type: "status", requestId: 8, state: "capturing", mode: "window", monitor: 9 }), { valid: false, type: "status" })
 })
 
 test("result events bound text and retain only display-safe metadata", () => {
@@ -182,23 +201,19 @@ test("result events bound text and retain only display-safe metadata", () => {
     type: "result",
     requestId: 9,
     mode: "region",
-    source: "region",
     text: "Heading\n\nA readable paragraph.",
-    paragraphs: ["Heading", "A readable paragraph."],
-    characters: 31,
-    geometry: "800x600+0+0",
     monitor: "eDP-1"
   })
   assert.equal(result.valid, true)
   assert.equal(result.requestId, 9)
   assert.equal(result.mode, "region")
   assert.equal(result.text, "Heading\n\nA readable paragraph.")
-  assert.deepEqual(result.paragraphs, ["Heading", "A readable paragraph."])
-  assert.equal(result.characters, model.codePointLength(result.text))
   assert.equal(result.monitor, "eDP-1")
   assert.deepEqual(model.parseEvent({ type: "result", requestId: 9, mode: "region", text: "  " }), { valid: false, type: "result" })
   assert.deepEqual(model.parseEvent({ type: "result", requestId: 9, mode: "region", text: ["unsafe"] }), { valid: false, type: "result" })
   assert.deepEqual(model.parseEvent({ type: "result", requestId: 9, mode: "network", text: "text" }), { valid: false, type: "result" })
+  assert.deepEqual(model.parseEvent({ type: "result", requestId: 9, source: "region", text: "text" }), { valid: false, type: "result" })
+  assert.deepEqual(model.parseEvent({ type: "result", requestId: 9, mode: "region", source: "window", text: "text" }), { valid: false, type: "result" })
 })
 
 test("oversized result text is deterministically capped", () => {
@@ -206,7 +221,6 @@ test("oversized result text is deterministically capped", () => {
   assert.equal(result.valid, true)
   assert.equal(result.text.length, model.MAX_DOCUMENT_LENGTH)
   assert.equal(result.text.endsWith("…"), true)
-  assert.equal(result.characters, model.MAX_DOCUMENT_LENGTH)
 })
 
 test("astral text uses the same Unicode character units as the backend", () => {
@@ -214,22 +228,19 @@ test("astral text uses the same Unicode character units as the backend", () => {
     type: "result",
     requestId: 10,
     mode: "window",
-    text: "😀".repeat(model.MAX_DOCUMENT_LENGTH + 5),
-    characters: model.MAX_DOCUMENT_LENGTH + 5
+    text: "😀".repeat(model.MAX_DOCUMENT_LENGTH + 5)
   })
   assert.equal(result.valid, true)
   assert.equal(model.codePointLength(result.text), model.MAX_DOCUMENT_LENGTH)
-  assert.equal(result.characters, model.MAX_DOCUMENT_LENGTH)
   assert.equal(result.text.endsWith("…"), true)
 })
 
 test("errors and cancellation are bounded terminal events", () => {
-  assert.deepEqual(model.parseEvent({ type: "cancelled", requestId: 11, mode: "region", message: " user cancelled " }), {
+  assert.deepEqual(model.parseEvent({ type: "cancelled", requestId: 11, mode: "region" }), {
     valid: true,
     type: "cancelled",
     requestId: 11,
-    mode: "region",
-    message: "user cancelled"
+    mode: "region"
   })
   assert.deepEqual(model.parseEvent({ type: "error", requestId: 11, code: "no_text", message: " Nothing\nreadable " }), {
     valid: true,
@@ -239,7 +250,9 @@ test("errors and cancellation are bounded terminal events", () => {
     message: "Nothing readable"
   })
   assert.deepEqual(model.parseEvent({ type: "error", requestId: 11, code: 500, message: "failed" }), { valid: false, type: "error" })
+  assert.deepEqual(model.parseEvent({ type: "error", requestId: 11, message: "failed" }), { valid: false, type: "error" })
   assert.deepEqual(model.parseEvent({ type: "cancelled", requestId: 11, mode: "remote" }), { valid: false, type: "cancelled" })
+  assert.deepEqual(model.parseEvent({ type: "cancelled", requestId: 11 }), { valid: false, type: "cancelled" })
 })
 
 test("request IDs are positive bounded protocol integers", () => {

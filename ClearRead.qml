@@ -70,8 +70,6 @@ Item {
   property bool settingsDirectoryStartPending: false
   property bool settingsDirty: false
 
-  property bool focusPrimed: false
-
   // Every control meets the 44-by-44 logical-pixel target without replacing
   // Omarchy's native button behavior, focus ring, or theme tokens.
   component AccessButton: Button {
@@ -187,7 +185,6 @@ Item {
     captureTerminalSeen = false
     activeDoctorRequestId = 0
     activeCaptureRequestId = 0
-    focusPrimed = false
 
     if (demoMode) {
       documentText = ClearReadModel.DEMO_DOCUMENT
@@ -207,19 +204,28 @@ Item {
   }
 
   function open(payloadJson) {
+    var payload = typeof payloadJson === "string" ? payloadJson : ""
+    if (pendingOpen) {
+      pendingPayload = payload
+      opened = true
+      surfaceVisible = true
+      phase = "checking"
+      if (!processesBusy()) resumePendingOpen()
+      return
+    }
     if (opened && !pendingOpen) {
       if (surfaceVisible) requestReaderFocus()
       return
     }
     if (processesBusy()) {
       pendingOpen = true
-      pendingPayload = typeof payloadJson === "string" ? payloadJson : ""
+      pendingPayload = payload
       opened = true
       surfaceVisible = true
       phase = "checking"
       return
     }
-    beginOpen(payloadJson)
+    beginOpen(payload)
   }
 
   function close() {
@@ -238,8 +244,6 @@ Item {
     doctorDiagnostic = ""
     captureDiagnostic = ""
     copyDiagnostic = ""
-    focusPrimed = false
-    focusPrimeTimer.stop()
     activeDoctorRequestId = 0
     activeCaptureRequestId = 0
 
@@ -267,11 +271,10 @@ Item {
     var payload = pendingPayload
     pendingOpen = false
     pendingPayload = ""
-    Qt.callLater(function() { root.beginOpen(payload) })
+    beginOpen(payload)
   }
 
   function requestReaderFocus() {
-    focusPrimed = false
     Qt.callLater(function() {
       if (!root.opened || !root.surfaceVisible) return
       var target = closeButton
@@ -288,7 +291,6 @@ Item {
         target = setupPrimaryButton
       }
       target.forceActiveFocus()
-      focusPrimeTimer.restart()
     })
   }
 
@@ -352,7 +354,6 @@ Item {
     // Unmap the reader before grim takes pixels. A short compositor tick is
     // intentional; otherwise ClearRead can OCR its own landing card.
     surfaceVisible = false
-    focusPrimed = false
     captureDelay.restart()
   }
 
@@ -397,7 +398,7 @@ Item {
     doctorReady = doctorCapabilities.window === true
       || doctorCapabilities.region === true
       || doctorCapabilities.clipboard === true
-    doctorMessage = event.message || ""
+    doctorMessage = ""
     doctorMissing = event.missing || []
     doctorIssues = event.issues || []
     errorMessage = ""
@@ -410,6 +411,7 @@ Item {
         || event.requestId !== activeCaptureRequestId) return
 
     if (event.type === "status") {
+      if (event.mode !== activeMode) return
       phase = event.state
       if (event.monitor) {
         captureMonitor = event.monitor
@@ -419,11 +421,11 @@ Item {
       return
     }
     if (event.type === "result") {
+      if (event.mode !== activeMode) return
       captureTerminalSeen = true
       activeCaptureRequestId = 0
       documentText = event.text
-      documentCharacters = event.characters || event.text.length
-      activeMode = event.mode || activeMode
+      documentCharacters = ClearReadModel.codePointLength(event.text)
       captureMonitor = event.monitor || captureMonitor
       if (captureMonitor !== "") targetMonitor = captureMonitor
       errorMessage = ""
@@ -433,6 +435,7 @@ Item {
       return
     }
     if (event.type === "cancelled") {
+      if (event.mode !== activeMode) return
       captureTerminalSeen = true
       activeCaptureRequestId = 0
       documentText = ""
@@ -554,13 +557,6 @@ Item {
       if (!root.opened || root.activeMode === "" || root.activeMode === "clipboard") return
       root.launchCapture()
     }
-  }
-
-  Timer {
-    id: focusPrimeTimer
-    interval: 90
-    repeat: false
-    onTriggered: root.focusPrimed = true
   }
 
   Timer {
@@ -747,7 +743,6 @@ Item {
     id: copyProcess
     stdinEnabled: true
     command: [root.backendPath, "--shell-pid", root.shellProcessId, "copy"]
-    stdout: StdioCollector { waitForEnd: true }
     stderr: SplitParser {
       onRead: function(line) {
         if (root.opened && !root.copyExpectedStop)
@@ -830,7 +825,7 @@ Item {
     WlrLayershell.namespace: "clearread-reader"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: visible
-      ? (root.focusPrimed ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.Exclusive)
+      ? WlrKeyboardFocus.Exclusive
       : WlrKeyboardFocus.None
 
     onVisibleChanged: if (visible) root.requestReaderFocus()
@@ -1323,11 +1318,12 @@ Item {
                         foreground: root.colours.text
                         accent: root.colours.accent
                         bordered: true
-                        Accessible.role: Accessible.Button
+                        Accessible.role: Accessible.RadioButton
                         Accessible.name: modelData.label + " typeface"
                         Accessible.checkable: true
                         Accessible.checked: selected
                         Accessible.onPressAction: clicked()
+                        Accessible.onToggleAction: clicked()
                         onActiveFocusChanged: root.revealSetting(this)
                         onClicked: root.applySetting("family", modelData.value)
                       }
@@ -1354,11 +1350,12 @@ Item {
                         foreground: root.colours.text
                         accent: root.colours.accent
                         bordered: true
-                        Accessible.role: Accessible.Button
+                        Accessible.role: Accessible.RadioButton
                         Accessible.name: modelData.label + " text weight"
                         Accessible.checkable: true
                         Accessible.checked: selected
                         Accessible.onPressAction: clicked()
+                        Accessible.onToggleAction: clicked()
                         onActiveFocusChanged: root.revealSetting(this)
                         onClicked: root.applySetting("weight", modelData.value)
                       }
@@ -1385,11 +1382,12 @@ Item {
                         foreground: root.colours.text
                         accent: root.colours.accent
                         bordered: true
-                        Accessible.role: Accessible.Button
+                        Accessible.role: Accessible.RadioButton
                         Accessible.name: modelData.label + " line height"
                         Accessible.checkable: true
                         Accessible.checked: selected
                         Accessible.onPressAction: clicked()
+                        Accessible.onToggleAction: clicked()
                         onActiveFocusChanged: root.revealSetting(this)
                         onClicked: root.applySetting("line", modelData.value)
                       }
@@ -1416,11 +1414,12 @@ Item {
                         foreground: root.colours.text
                         accent: root.colours.accent
                         bordered: true
-                        Accessible.role: Accessible.Button
+                        Accessible.role: Accessible.RadioButton
                         Accessible.name: modelData.label + " letter spacing"
                         Accessible.checkable: true
                         Accessible.checked: selected
                         Accessible.onPressAction: clicked()
+                        Accessible.onToggleAction: clicked()
                         onActiveFocusChanged: root.revealSetting(this)
                         onClicked: root.applySetting("letter", modelData.value)
                       }
@@ -1447,11 +1446,12 @@ Item {
                         foreground: root.colours.text
                         accent: root.colours.accent
                         bordered: true
-                        Accessible.role: Accessible.Button
+                        Accessible.role: Accessible.RadioButton
                         Accessible.name: modelData.label + " word spacing"
                         Accessible.checkable: true
                         Accessible.checked: selected
                         Accessible.onPressAction: clicked()
+                        Accessible.onToggleAction: clicked()
                         onActiveFocusChanged: root.revealSetting(this)
                         onClicked: root.applySetting("word", modelData.value)
                       }
@@ -1482,11 +1482,12 @@ Item {
                         foreground: root.colours.text
                         accent: root.colours.accent
                         bordered: true
-                        Accessible.role: Accessible.Button
+                        Accessible.role: Accessible.RadioButton
                         Accessible.name: modelData.label + " text column"
                         Accessible.checkable: true
                         Accessible.checked: selected
                         Accessible.onPressAction: clicked()
+                        Accessible.onToggleAction: clicked()
                         onActiveFocusChanged: root.revealSetting(this)
                         onClicked: root.applySetting("column", modelData.value)
                       }
@@ -1518,11 +1519,12 @@ Item {
                         foreground: root.colours.text
                         accent: root.colours.accent
                         bordered: true
-                        Accessible.role: Accessible.Button
+                        Accessible.role: Accessible.RadioButton
                         Accessible.name: modelData.label + " colour palette"
                         Accessible.checkable: true
                         Accessible.checked: selected
                         Accessible.onPressAction: clicked()
+                        Accessible.onToggleAction: clicked()
                         onActiveFocusChanged: root.revealSetting(this)
                         onClicked: root.applySetting("palette", modelData.value)
                       }
@@ -1554,11 +1556,12 @@ Item {
                         foreground: root.colours.text
                         accent: root.colours.accent
                         bordered: true
-                        Accessible.role: Accessible.Button
+                        Accessible.role: Accessible.RadioButton
                         Accessible.name: modelData.label + " line focus"
                         Accessible.checkable: true
                         Accessible.checked: selected
                         Accessible.onPressAction: clicked()
+                        Accessible.onToggleAction: clicked()
                         onActiveFocusChanged: root.revealSetting(this)
                         onClicked: root.applySetting("focus", modelData.value)
                       }
@@ -1620,6 +1623,7 @@ Item {
                   lineHeightMode: Text.ProportionalHeight
                   Accessible.role: Accessible.StaticText
                   Accessible.name: root.documentText
+                  Accessible.multiLine: true
                   Accessible.description: "Recognized text in the ClearRead reader"
                 }
               }

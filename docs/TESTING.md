@@ -49,12 +49,13 @@ Before release, record evidence for every unchecked item in
 - 1-, 3-, and 5-line focus behavior;
 - clipboard unchanged until Copy;
 - two-display placement and scale factors 1.0, 1.25, and 2.0;
-- no image or text artifact in plugin config, cache, runtime, or temporary
-  paths; and
+- no image or text artifact from the capture/OCR pipeline in plugin config,
+  cache, runtime, or temporary paths;
 - capture and OCR processes gone within two seconds after Cancel, Close,
   disable, hot reload, and shell restart; and
 - after explicit Copy, the ordinary `wl-copy` provider remains usable until
-  clipboard ownership changes, then exits.
+  clipboard ownership changes, then exits; standard private transient backing
+  is not mistaken for ClearRead history.
 
 Use generated, non-sensitive fixture text for screenshots and logs. Never put
 a personal document, remote-desktop session, or clipboard payload in a bug
