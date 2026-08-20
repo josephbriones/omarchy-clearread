@@ -47,7 +47,8 @@ to the marketplace until every applicable item has evidence.
 - [ ] 100%, 200%, 300%, and 400% magnification work from keyboard and pointer
       without changing unrelated presentation preferences.
 - [ ] Compare source shows the exact window/region OCR input at Fit, 2x, and 4x;
-      clipboard, demo, and out-of-bounds images offer no source view.
+      clipboard and demo results offer no source view, unavailable sealed
+      memory omits it, and out-of-bounds images fail before recognition.
 - [ ] Read another, Close, disable, reload, and shell exit release the source
       descriptor without file-descriptor growth across repeated captures.
 - [ ] Explicit Copy works from both keyboard and pointer without placing text

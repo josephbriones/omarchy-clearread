@@ -14,7 +14,8 @@ The helper:
 
 - accepts only documented capture modes;
 - validates capture geometry and OCR language syntax;
-- caps accepted image, text, diagnostic, and JSON sizes;
+- validates PNG structure and caps encoded bytes, decoded dimensions, decoded
+  pixels, text, diagnostics, and JSON before invoking Tesseract or rendering;
 - applies recognition and process-shutdown timeouts;
 - uses a two-stage parent-death chain so a force-killed QML process still
   leaves the worker time to reap only children it owns;

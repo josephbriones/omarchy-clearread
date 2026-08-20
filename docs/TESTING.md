@@ -12,8 +12,10 @@ executables. It covers geometry and language validation, every Wayland output
 transform, reflow, Unicode, stable failure families, timeouts, cancellation,
 output bounds, JSON protocol, copy input, child cleanup, and the absence of
 plugin-created capture artifacts. It also validates PNG headers, descriptor
-bounds, and source omission for clipboard or oversized images. On Linux, the
-suite additionally validates anonymous-memory sealing, exact source bytes,
+bounds, source omission for clipboard text, and rejection of over-limit
+decoded images before Tesseract is called. Exact dimension and pixel
+boundaries remain accepted. On Linux, the suite additionally validates
+anonymous-memory sealing, exact source bytes,
 release/EOF/cancel cleanup, and file-descriptor counts. It also SIGKILLs the
 QML-facing launcher during selection, after the frozen frame has been handed
 to `grim`, and during Tesseract recognition, then proves the worker and owned

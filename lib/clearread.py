@@ -785,6 +785,21 @@ def png_dimensions(image):
   return width, height
 
 
+def validate_recognition_image(image):
+  width, height = png_dimensions(image)
+  if (
+    width > MAX_SOURCE_DIMENSION
+    or height > MAX_SOURCE_DIMENSION
+    or width * height > MAX_SOURCE_PIXELS
+  ):
+    raise ClearReadError(
+      "capture_too_large",
+      "The captured image is too large to recognize safely. Choose a smaller window or screen area and try again.",
+    )
+
+  return width, height
+
+
 def retain_source_image(image):
   width, height = png_dimensions(image)
   if (
@@ -984,6 +999,7 @@ def capture(mode, omarchy_path, language):
       text = capture_clipboard()
     else:
       image = capture_png(geometry)
+      validate_recognition_image(image)
       if frozen_screen is not None:
         frozen_screen.close()
         frozen_screen = None

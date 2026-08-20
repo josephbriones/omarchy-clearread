@@ -9,7 +9,7 @@ words, and gets out of the way.
 
 It is the difference between making pixels larger and making text readable.
 
-![ClearRead reflowing a small scanned document into a focused Sepia reading view](preview.png)
+![ClearRead reflowing a small scanned document with 100–400% magnification and Compare source controls](preview.png)
 
 ## What it does
 
@@ -69,8 +69,10 @@ memory, it returns with a local recognition state and then opens the reader.
 Window and region results may offer **Compare source**, a temporary Fit, 2x,
 or 4x view of the exact pixels sent to OCR. This is useful for checking names,
 amounts, model numbers, punctuation, and other details OCR can misread. The
-button is absent for clipboard text, demo mode, and images outside the bounded
-source-view limits.
+button is absent for clipboard text, demo mode, or when sealed anonymous
+memory is unavailable. A captured PNG above 32,768 pixels on either axis or
+33,177,600 decoded pixels is rejected before OCR with a prompt to choose a
+smaller window or screen area.
 
 In the reader, Tab moves through every control, including the explicit
 **Copy** button. Other useful keys:
@@ -102,8 +104,10 @@ already present in a standard installation: Omarchy's region picker, `grim`,
 
 English OCR data is part of the standard installation. Additional Tesseract
 languages are optional. ClearRead honors `OMARCHY_OCR_LANGS`, using `eng` when
-it is unset. The [setup guide](docs/SETUP.md) covers language checks and the
-local doctor command.
+it is unset. The value is limited to lowercase ASCII language codes containing
+letters, digits, or underscores, joined with `+`, such as `eng+spa`; the whole
+value may be at most 120 characters. The [setup guide](docs/SETUP.md) covers
+language checks and the local doctor command.
 
 Opening ClearRead checks these local capabilities. It never installs a
 package, downloads language data, changes a global shortcut, or rewrites

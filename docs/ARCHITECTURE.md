@@ -18,6 +18,9 @@ ClearRead.qml ── foreground Process ── bin/clearread launcher
               │                           │                         │
               └────────── grim PNG in memory ───────────┐          │
                                                        ▼          │
+                                             decoded-image bounds  │
+                                                       │          │
+                                                       ▼          │
                                                 local Tesseract    │
                                                        │          │
                                                        └────┬─────┘
@@ -73,14 +76,15 @@ signalled.
 **Clipboard** reads an existing text MIME payload. It opens neither `grim` nor
 Tesseract.
 
-For pixel paths, `grim` returns PNG bytes on stdout. Those bytes are passed to
-Tesseract on stdin. Both stages are bounded and no filename exists. After OCR,
-valid images within the 32,768-pixel per-axis and 33,177,600-pixel decoded
-bounds can be copied into a sealed anonymous Linux memory file. The worker
-emits only a validated `/proc` file-descriptor URI and dimensions, then holds
-that descriptor until QML sends `release\n`, closes stdin, or cancels. If the
-platform or image is ineligible, OCR still succeeds and the source descriptor
-is simply omitted.
+For pixel paths, `grim` returns PNG bytes on stdout. Before Tesseract starts,
+the worker validates the PNG header and rejects images above 32,768 pixels on
+either axis or 33,177,600 decoded pixels with the stable `capture_too_large`
+error. Accepted bytes pass to Tesseract on stdin; no filename exists. After
+OCR, the same bounded image can be copied into a sealed anonymous Linux memory
+file. The worker emits only a validated `/proc` file-descriptor URI and
+dimensions, then holds that descriptor until QML sends `release\n`, closes
+stdin, or cancels. If sealed anonymous memory is unavailable, OCR still
+succeeds and the source descriptor is simply omitted.
 
 ## Protocol
 

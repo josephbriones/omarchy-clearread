@@ -95,6 +95,7 @@ Item {
     : configHome + "/io.github.josephbriones.clearread"
   readonly property string settingsPath: settingsDirectory === "" ? "" : settingsDirectory + "/settings.json"
   readonly property bool readerVisible: phase === "reading" && documentText !== ""
+  readonly property bool clipboardCaptureActive: phase === "capturing" && activeMode === "clipboard"
   readonly property bool sourceAvailable: sourceHeld && !demoMode
     && (activeMode === "window" || activeMode === "region")
   readonly property string sourceUri: sourceDescriptor ? String(sourceDescriptor.uri) : ""
@@ -116,6 +117,7 @@ Item {
     if (demoMode) return "Synthetic preview · no screen or clipboard access"
     if (sourceViewVisible) return "Temporary source view · released when you close or read another"
     if (phase === "selecting") return "Waiting for your selection"
+    if (clipboardCaptureActive) return "Reading clipboard text · no screen capture or OCR"
     if (phase === "capturing") return "Capturing only what you requested"
     if (phase === "recognizing") return "Recognizing locally · nothing is uploaded"
     if (readerVisible && sourceHeld) return "Temporary local result and source · nothing is saved"
@@ -1087,6 +1089,8 @@ Item {
                 color: root.colours.muted
                 font.family: Style.font.family
                 font.pixelSize: Style.font.bodySmall
+                Accessible.role: Accessible.StaticText
+                Accessible.name: text
               }
             }
 
@@ -1191,6 +1195,7 @@ Item {
               width: parent.width
               text: root.phase === "checking" ? "Checking local reading tools…"
                 : root.phase === "recognizing" ? "Making this easier to read…"
+                : root.clipboardCaptureActive ? "Reading clipboard text…"
                 : root.phase === "setup" ? "Local setup needed"
                 : root.phase === "error" ? "That content could not be read"
                 : "Read anything on your screen"
@@ -1279,15 +1284,19 @@ Item {
             }
 
             Text {
-              visible: root.phase === "recognizing"
+              visible: root.phase === "recognizing" || root.clipboardCaptureActive
               width: parent.width
-              text: "Local OCR is reflowing your " + ClearReadModel.modeLabel(root.activeMode) + "."
+              text: root.clipboardCaptureActive
+                ? "Reading only the clipboard text you requested. No screen capture or OCR is running."
+                : "Local OCR is reflowing your " + ClearReadModel.modeLabel(root.activeMode) + "."
               textFormat: Text.PlainText
               color: root.colours.muted
               font.family: Style.font.family
               font.pixelSize: Style.font.body
               horizontalAlignment: Text.AlignHCenter
               wrapMode: Text.WordWrap
+              Accessible.role: Accessible.StaticText
+              Accessible.name: text
             }
 
             Text {

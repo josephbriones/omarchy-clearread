@@ -41,8 +41,10 @@ eligible window and region reads, the supervised worker may also hold the
 sealed anonymous source image for the optional **Compare source** view.
 Starting another read and closing the plugin release both. This is ordinary
 process-memory disposal, not a claim of secure memory erasure. Clipboard text,
-demo mode, unsupported platforms, and images beyond the source-view bounds do
-not receive a source image.
+demo mode, and unsupported sealed-memory platforms do not receive a source
+image. A capture above the 32,768-pixel per-axis or 33,177,600-pixel decoded
+limit fails before OCR; ClearRead asks the user to choose a smaller window or
+screen area and retains neither recognized text nor a source image.
 
 ClearRead retains only presentation preferences:
 

@@ -55,6 +55,36 @@ class RepositoryTests(unittest.TestCase):
         ]:
             self.assertIn(phrase, readme)
 
+    def test_language_docs_match_the_supported_identifier_grammar(self):
+        setup = (ROOT / "docs/SETUP.md").read_text(encoding="utf-8")
+        self.assertRegex(setup, r"lowercase Tesseract\s+language codes")
+        for phrase in (
+            "ASCII letters, digits, and underscores",
+            "complete value may be at most 120 characters",
+            "`script/Latin` are unsupported",
+        ):
+            self.assertIn(phrase, setup)
+
+    def test_preview_shows_the_current_reflow_and_source_controls(self):
+        svg = (ROOT / "assets/preview.svg").read_text(encoding="utf-8")
+        for label in (
+            "Reflow magnifier",
+            "100%",
+            "200%",
+            "300%",
+            "400%",
+            "Compare source",
+            "Fit, 2×, or 4×",
+        ):
+            self.assertIn(label, svg)
+        self.assertNotIn("READING VIEW", svg)
+
+        png = (ROOT / "preview.png").read_bytes()
+        self.assertEqual(png[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(int.from_bytes(png[16:20], "big"), 1600)
+        self.assertEqual(int.from_bytes(png[20:24], "big"), 900)
+        self.assertLess(len(png), 2 * 1024 * 1024)
+
     def test_root_scanner_text_avoids_privileged_or_remote_install_patterns(self):
         scanned = "\n".join(
             (ROOT / name).read_text(encoding="utf-8")
@@ -78,6 +108,31 @@ class RepositoryTests(unittest.TestCase):
             start = qml.index(binding)
             self.assertIn("textFormat: Text.PlainText", qml[start : start + 240], binding)
         self.assertIn("keepLoaded", (ROOT / "manifest.json").read_text(encoding="utf-8"))
+
+    def test_clipboard_capture_has_truthful_plain_text_accessibility_status(self):
+        qml = (ROOT / "ClearRead.qml").read_text(encoding="utf-8")
+        self.assertIn(
+            'readonly property bool clipboardCaptureActive: phase === "capturing" && activeMode === "clipboard"',
+            qml,
+        )
+        self.assertIn(
+            'if (clipboardCaptureActive) return "Reading clipboard text · no screen capture or OCR"',
+            qml,
+        )
+        self.assertIn(
+            ': root.clipboardCaptureActive ? "Reading clipboard text…"',
+            qml,
+        )
+
+        start = qml.index('visible: root.phase === "recognizing" || root.clipboardCaptureActive')
+        status = qml[start : start + 750]
+        for contract in (
+            "Reading only the clipboard text you requested. No screen capture or OCR is running.",
+            "textFormat: Text.PlainText",
+            "Accessible.role: Accessible.StaticText",
+            "Accessible.name: text",
+        ):
+            self.assertIn(contract, status)
 
     def test_qml_host_lifecycle_and_ipc_contract_are_explicit(self):
         qml = (ROOT / "ClearRead.qml").read_text(encoding="utf-8")
