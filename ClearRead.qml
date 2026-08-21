@@ -77,8 +77,9 @@ Item {
   // Every control meets the 44-by-44 logical-pixel target without replacing
   // Omarchy's native button behavior, focus ring, or theme tokens.
   component AccessButton: Button {
-    verticalPadding: Math.max(Style.spacing.controlPaddingY, (44 - fontSize) / 2)
-    horizontalPadding: Math.max(Style.spacing.controlPaddingX, (44 - fontSize) / 2)
+    readonly property real minimumTargetSize: Math.max(44, Style.space(44))
+    verticalPadding: Math.max(Style.spacing.controlPaddingY, (minimumTargetSize - fontSize) / 2)
+    horizontalPadding: Math.max(Style.spacing.controlPaddingX, (minimumTargetSize - fontSize) / 2)
   }
 
   readonly property string pluginId: manifest && manifest.id
@@ -1055,128 +1056,146 @@ Item {
 
         Rectangle {
           Layout.fillWidth: true
-          Layout.preferredHeight: Math.max(72, Style.space(64))
+          Layout.preferredHeight: Math.max(Style.space(72), headerContent.implicitHeight + Style.space(24))
           color: root.colours.surface
           border.color: root.colours.border
           border.width: 1
 
-          RowLayout {
+          ColumnLayout {
+            id: headerContent
             anchors.fill: parent
             anchors.leftMargin: Style.space(20)
             anchors.rightMargin: Style.space(16)
-            spacing: Style.space(12)
+            anchors.topMargin: Style.space(12)
+            anchors.bottomMargin: Style.space(12)
+            spacing: Style.space(8)
 
-            Rectangle {
-              Layout.preferredWidth: Style.space(11)
-              Layout.preferredHeight: width
-              radius: width / 2
-              color: root.colours.accent
-            }
-
-            Column {
+            RowLayout {
               Layout.fillWidth: true
-              spacing: 1
-              Text {
-                text: "ClearRead"
-                color: root.colours.text
-                font.family: Style.font.family
-                font.pixelSize: Style.font.subtitle
-                font.bold: true
+              spacing: Style.space(12)
+
+              Rectangle {
+                Layout.preferredWidth: Style.space(11)
+                Layout.preferredHeight: width
+                radius: width / 2
+                color: root.colours.accent
               }
-              Text {
-                text: root.privacyStatus
-                textFormat: Text.PlainText
-                color: root.colours.muted
-                font.family: Style.font.family
-                font.pixelSize: Style.font.bodySmall
-                Accessible.role: Accessible.StaticText
-                Accessible.name: text
+
+              Column {
+                Layout.fillWidth: true
+                spacing: Style.space(1)
+                Text {
+                  text: "ClearRead"
+                  color: root.colours.text
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.subtitle
+                  font.bold: true
+                }
+                Text {
+                  width: parent.width
+                  text: root.privacyStatus
+                  textFormat: Text.PlainText
+                  color: root.colours.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                  wrapMode: Text.WordWrap
+                  Accessible.role: Accessible.StaticText
+                  Accessible.name: text
+                }
+                Text {
+                  visible: root.transientMessage !== ""
+                  width: parent.width
+                  text: root.transientMessage
+                  textFormat: Text.PlainText
+                  color: root.colours.accent
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                  wrapMode: Text.WordWrap
+                }
+              }
+
+              AccessButton {
+                id: closeButton
+                text: "Close"
+                focusable: true
+                foreground: root.colours.text
+                accent: root.colours.accent
+                bordered: true
+                tooltipText: "Close and clear the current text"
+                Accessible.role: Accessible.Button
+                Accessible.name: "Close ClearRead and clear its text"
+                Accessible.onPressAction: clicked()
+                onClicked: root.dismiss()
               }
             }
 
-            Text {
-              visible: root.transientMessage !== ""
-              text: root.transientMessage
-              textFormat: Text.PlainText
-              color: root.colours.accent
-              font.family: Style.font.family
-              font.pixelSize: Style.font.bodySmall
-              font.bold: true
-            }
+            Flow {
+              id: headerActions
+              Layout.fillWidth: true
+              Layout.preferredHeight: visible ? childrenRect.height : 0
+              visible: root.readerVisible
+              spacing: Style.space(8)
 
-            AccessButton {
-              id: compareSourceButton
-              visible: root.readerVisible && root.sourceAvailable && !root.sourceViewVisible
-              text: "Compare source"
-              focusable: true
-              foreground: root.colours.text
-              accent: root.colours.accent
-              bordered: true
-              tooltipText: "Magnify the temporary source image"
-              Accessible.role: Accessible.Button
-              Accessible.name: "Compare recognized text with the temporary source image"
-              Accessible.description: "The source stays in memory and is released when you close or read another item"
-              Accessible.onPressAction: clicked()
-              onClicked: root.showSource()
-            }
-            AccessButton {
-              id: sourceBackButton
-              visible: root.readerVisible && root.sourceViewVisible
-              text: "Readable text"
-              focusable: true
-              foreground: root.colours.text
-              accent: root.colours.accent
-              bordered: true
-              tooltipText: "Return to the reflowed text"
-              Accessible.role: Accessible.Button
-              Accessible.name: "Return to readable text"
-              Accessible.onPressAction: clicked()
-              onClicked: root.showText()
-            }
-            AccessButton {
-              id: copyButton
-              visible: root.readerVisible
-              text: "Copy"
-              iconText: "⧉"
-              focusable: true
-              enabled: !copyProcess.running && !root.copyStartPending
-                && (!captureProcess.running || root.sourceHeld) && !root.captureStartPending
-                && (root.demoMode || root.doctorCapabilities.copy === true)
-              foreground: root.colours.text
-              accent: root.colours.accent
-              bordered: true
-              tooltipText: "Copy the displayed text"
-              Accessible.role: Accessible.Button
-              Accessible.name: "Copy displayed text"
-              Accessible.onPressAction: clicked()
-              onClicked: root.copyDocument()
-            }
-            AccessButton {
-              id: readAnotherButton
-              visible: root.readerVisible
-              text: "Read another"
-              focusable: true
-              enabled: (!captureProcess.running || root.sourceHeld) && !root.captureStartPending
-              foreground: root.colours.text
-              accent: root.colours.accent
-              bordered: true
-              Accessible.role: Accessible.Button
-              Accessible.name: "Read another item"
-              Accessible.onPressAction: clicked()
-              onClicked: root.readAnother()
-            }
-            AccessButton {
-              id: closeButton
-              text: "Close"
-              focusable: true
-              foreground: root.colours.text
-              accent: root.colours.accent
-              bordered: true
-              tooltipText: "Close and clear the current text"
-              Accessible.role: Accessible.Button
-              Accessible.name: "Close ClearRead and clear its text"
-              Accessible.onPressAction: clicked()
-              onClicked: root.dismiss()
+              AccessButton {
+                id: compareSourceButton
+                visible: root.sourceAvailable && !root.sourceViewVisible
+                text: "Compare source"
+                focusable: true
+                foreground: root.colours.text
+                accent: root.colours.accent
+                bordered: true
+                tooltipText: "Magnify the temporary source image"
+                Accessible.role: Accessible.Button
+                Accessible.name: "Compare recognized text with the temporary source image"
+                Accessible.description: "The source stays in memory and is released when you close or read another item"
+                Accessible.onPressAction: clicked()
+                onClicked: root.showSource()
+              }
+              AccessButton {
+                id: sourceBackButton
+                visible: root.sourceViewVisible
+                text: "Readable text"
+                focusable: true
+                foreground: root.colours.text
+                accent: root.colours.accent
+                bordered: true
+                tooltipText: "Return to the reflowed text"
+                Accessible.role: Accessible.Button
+                Accessible.name: "Return to readable text"
+                Accessible.onPressAction: clicked()
+                onClicked: root.showText()
+              }
+              AccessButton {
+                id: copyButton
+                text: "Copy"
+                iconText: "⧉"
+                focusable: true
+                enabled: !copyProcess.running && !root.copyStartPending
+                  && (!captureProcess.running || root.sourceHeld) && !root.captureStartPending
+                  && (root.demoMode || root.doctorCapabilities.copy === true)
+                foreground: root.colours.text
+                accent: root.colours.accent
+                bordered: true
+                tooltipText: "Copy the displayed text"
+                Accessible.role: Accessible.Button
+                Accessible.name: "Copy displayed text"
+                Accessible.onPressAction: clicked()
+                onClicked: root.copyDocument()
+              }
+              AccessButton {
+                id: readAnotherButton
+                text: "Read another"
+                focusable: true
+                enabled: (!captureProcess.running || root.sourceHeld) && !root.captureStartPending
+                foreground: root.colours.text
+                accent: root.colours.accent
+                bordered: true
+                Accessible.role: Accessible.Button
+                Accessible.name: "Read another item"
+                Accessible.onPressAction: clicked()
+                onClicked: root.readAnother()
+              }
             }
           }
         }
@@ -1187,7 +1206,7 @@ Item {
 
           Column {
             visible: !root.readerVisible
-            width: Math.min(760, parent.width - Style.space(48))
+            width: Math.min(Style.space(760), parent.width - Style.space(48))
             anchors.centerIn: parent
             spacing: Style.space(18)
 
@@ -1202,7 +1221,7 @@ Item {
               textFormat: Text.PlainText
               color: root.colours.text
               font.family: Style.font.family
-              font.pixelSize: Math.max(28, Style.font.title * 1.35)
+              font.pixelSize: Style.font.displayLarge
               font.bold: true
               horizontalAlignment: Text.AlignHCenter
               wrapMode: Text.WordWrap
@@ -1416,7 +1435,7 @@ Item {
 
             BorderSurface {
               visible: !root.sourceViewVisible
-              Layout.preferredWidth: Math.min(312, Math.max(248, readerLayout.width * 0.29))
+              Layout.preferredWidth: Math.min(Style.space(312), Math.max(Style.space(248), readerLayout.width * 0.29))
               Layout.fillHeight: true
               color: root.colours.surface
               borderSpec: Border.surfaceSpec("popups", "border", root.colours.border, 1)
@@ -1939,7 +1958,7 @@ Item {
                 Text {
                   visible: sourceImage.status === Image.Error
                   anchors.centerIn: parent
-                  width: Math.min(parent.width - Style.space(32), 520)
+                  width: Math.min(parent.width - Style.space(32), Style.space(520))
                   text: "The temporary source image could not be displayed. Your readable text is still available."
                   textFormat: Text.PlainText
                   color: "#ffffff"

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Align major reader dimensions and control targets with Omarchy's shared `Style` tokens, and wrap header actions when space is constrained.
 - Reject decoded images above the existing source-lens limits before starting
   Tesseract, with a stable prompt to choose a smaller capture.
 - Show a truthful, accessible plain-text progress state while clipboard text

@@ -1639,15 +1639,16 @@ class ClearReadTests(unittest.TestCase):
       import subprocess
       import sys
 
-      subprocess.Popen(
+      child = subprocess.Popen(
         [
           sys.executable, "-c",
           "import os,time; from pathlib import Path; "
-          "Path(os.environ['FAKE_GRANDCHILD_PID']).write_text(str(os.getpid()), encoding='ascii'); "
           "time.sleep(1); Path(os.environ['FAKE_SURVIVOR']).write_text('orphan'); time.sleep(10)",
         ],
         preexec_fn=lambda: signal.signal(signal.SIGTERM, signal.SIG_IGN),
       )
+      from pathlib import Path
+      Path(os.environ["FAKE_GRANDCHILD_PID"]).write_text(str(child.pid), encoding="ascii")
     """)
     environment = self.environment()
     environment.update({
@@ -1659,7 +1660,7 @@ class ClearReadTests(unittest.TestCase):
       with self.assertRaises(clearread.CommandTimeout):
         clearread.run_owned(["leader-exits"], timeout=0.3)
 
-    self.assertTrue(grandchild_pid.exists(), "grandchild did not start before timeout")
+    self.assertTrue(grandchild_pid.exists(), "leader did not record its spawned grandchild")
     self.assert_pid_stopped(int(grandchild_pid.read_text(encoding="ascii")))
     time.sleep(0.4)
     self.assertFalse(survivor.exists(), "pipe-inheriting grandchild escaped its owned PGID")

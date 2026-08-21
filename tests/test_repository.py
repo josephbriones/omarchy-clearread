@@ -187,7 +187,8 @@ class RepositoryTests(unittest.TestCase):
         qml = (ROOT / "ClearRead.qml").read_text(encoding="utf-8")
         self.assertEqual(qml.count("AccessButton {"), 23)
         self.assertIn("component AccessButton: Button", qml)
-        self.assertIn("(44 - fontSize) / 2", qml)
+        self.assertIn("Math.max(44, Style.space(44))", qml)
+        self.assertIn("(minimumTargetSize - fontSize) / 2", qml)
         self.assertIn("target.forceActiveFocus()", qml)
         self.assertIn("WlrKeyboardFocus.Exclusive", qml)
         self.assertNotIn("focusPrime", qml)
@@ -197,6 +198,26 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(qml.count("Accessible.onToggleAction: clicked()"), 10)
         self.assertIn("String(Quickshell.processId)", qml)
         self.assertEqual(qml.count('"--shell-pid", root.shellProcessId'), 3)
+
+    def test_header_and_major_dimensions_follow_omarchy_scaling(self):
+        qml = (ROOT / "ClearRead.qml").read_text(encoding="utf-8")
+        header_start = qml.index("id: headerContent")
+        header_end = qml.index("id: headerActions", header_start) + 260
+        header = qml[header_start:header_end]
+        self.assertIn("ColumnLayout", qml[header_start - 40 : header_start])
+        self.assertIn("Flow {", header)
+        self.assertIn("Layout.preferredHeight: visible ? childrenRect.height : 0", header)
+        self.assertIn(
+            "Layout.preferredHeight: Math.max(Style.space(72), headerContent.implicitHeight + Style.space(24))",
+            qml,
+        )
+        for contract in (
+            "Math.min(Style.space(760), parent.width - Style.space(48))",
+            "font.pixelSize: Style.font.displayLarge",
+            "Math.min(Style.space(312), Math.max(Style.space(248), readerLayout.width * 0.29))",
+            "Math.min(parent.width - Style.space(32), Style.space(520))",
+        ):
+            self.assertIn(contract, qml)
 
     def test_reflow_magnifier_is_visible_keyboard_accessible_and_horizontal_scroll_free(self):
         qml = (ROOT / "ClearRead.qml").read_text(encoding="utf-8")
