@@ -128,3 +128,27 @@ rich-text selection markup.
 Only an allowlisted presentation object is written. Capture mode state,
 screen geometry, clipboard data, image bytes, OCR text, errors, and source
 application details are not settings and are never persisted.
+
+QML starts fixed-argument `settings-read` and `settings-write` commands through
+the same supervised launcher. It never constructs the settings path and does
+not use `FileView` or `mkdir`. A load completes before changes can be queued.
+Saves are debounced and serialized: each worker receives one captured JSON
+line, changes made while it runs remain dirty, and one follow-up save writes
+the newest complete snapshot.
+
+The settings helper derives one fixed directory and filename from
+`$XDG_CONFIG_HOME`, or `$HOME/.config`. It traverses every component from an
+open filesystem-root descriptor with `O_NOFOLLOW | O_DIRECTORY`; only a save
+creates missing configuration components, relative to the verified parent.
+It holds directory descriptors across validation and access, refuses a
+symlinked or non-0700 plugin directory, and requires current-user ownership.
+A settings file is opened nonblocking and without following symlinks, then
+must be a current-user, single-link regular
+file no larger than 4096 bytes before any read. The bounded bytes must match
+the exact presentation schema. A save uses a new 0600 file in the verified
+directory, fsyncs it, atomically replaces the fixed destination with dirfd
+semantics, and fsyncs the directory. A path, type, owner, link, or directory-mode
+safety failure leaves defaults in memory and never overwrites the unsafe object.
+Malformed or oversized content is not consumed; when its pathname still refers
+to an otherwise safe owned regular file with one link, a later explicit settings
+change may replace it atomically with a validated snapshot.

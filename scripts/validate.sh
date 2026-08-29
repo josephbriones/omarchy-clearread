@@ -22,7 +22,7 @@ say "==> Repository and manifest"
 python3 -m json.tool manifest.json >/dev/null
 
 say "==> Python syntax and tests"
-python3 -m py_compile lib/clearread.py bin/clearread
+python3 -m py_compile lib/clearread.py lib/clearread_settings.py bin/clearread
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 
 say "==> JavaScript model tests"

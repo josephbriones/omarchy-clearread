@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Move persistent settings behind a bounded, descriptor-safe helper that
+  rejects unsafe files and atomically replaces a private destination.
 - Align major reader dimensions and control targets with Omarchy's shared `Style` tokens, and wrap header actions when space is constrained.
 - Reject decoded images above the existing source-lens limits before starting
   Tesseract, with a stable prompt to choose a smaller capture.
