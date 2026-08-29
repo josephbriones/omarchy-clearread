@@ -619,7 +619,7 @@ class ClearReadTests(unittest.TestCase):
         if stream is not None and not stream.closed:
           stream.close()
 
-  def test_source_lens_omits_oversized_images_and_clipboard_content(self):
+  def test_oversized_capture_fails_closed_and_clipboard_has_no_source(self):
     oversized = self.run_cli(
       "capture", "--mode", "window",
       "--omarchy-path", str(self.omarchy_path),
@@ -632,8 +632,10 @@ class ClearReadTests(unittest.TestCase):
       "--language", "eng",
     )
 
-    self.assertEqual(oversized.returncode, 0, oversized.stderr.decode())
-    self.assertNotIn("source", self.events(oversized)[-1])
+    self.assertEqual(oversized.returncode, 1)
+    oversized_error = self.events(oversized)[-1]
+    self.assertEqual(oversized_error["code"], "capture_too_large")
+    self.assertIn("smaller window or screen area", oversized_error["message"])
     self.assertEqual(clipboard.returncode, 0, clipboard.stderr.decode())
     self.assertNotIn("source", self.events(clipboard)[-1])
 
@@ -1163,6 +1165,53 @@ class ClearReadTests(unittest.TestCase):
       with self.subTest(length=len(image)):
         self.assert_error_code("capture_failed", lambda: clearread.png_dimensions(image))
 
+  def test_recognition_image_limits_accept_exact_boundaries(self):
+    self.assertEqual(7680 * 4320, clearread.MAX_SOURCE_PIXELS)
+    images = (
+      png_image(7680, 4320),
+      png_image(clearread.MAX_SOURCE_DIMENSION, 1),
+      png_image(1, clearread.MAX_SOURCE_DIMENSION),
+    )
+
+    for image in images:
+      with self.subTest(dimensions=clearread.png_dimensions(image)):
+        with (
+          mock.patch.object(clearread, "active_window_geometry", return_value="0,0 1x1"),
+          mock.patch.object(clearread, "capture_png", return_value=image),
+          mock.patch.object(clearread, "monitor_data", return_value=[]),
+          mock.patch.object(clearread, "monitor_for_geometry", return_value=None),
+          mock.patch.object(clearread, "recognize_image", return_value="Readable text") as recognize,
+          mock.patch.object(clearread, "retain_source_image", return_value=None),
+          mock.patch.object(clearread, "emit"),
+        ):
+          clearread.capture("window", "/omarchy", "eng")
+
+        recognize.assert_called_once_with(image, "eng")
+
+  def test_recognition_image_limits_reject_oversize_before_tesseract(self):
+    images = (
+      png_image(7681, 4320),
+      png_image(clearread.MAX_SOURCE_DIMENSION + 1, 1),
+      png_image(1, clearread.MAX_SOURCE_DIMENSION + 1),
+    )
+
+    for image in images:
+      with self.subTest(dimensions=clearread.png_dimensions(image)):
+        with (
+          mock.patch.object(clearread, "active_window_geometry", return_value="0,0 1x1"),
+          mock.patch.object(clearread, "capture_png", return_value=image),
+          mock.patch.object(clearread, "recognize_image") as recognize,
+          mock.patch.object(clearread, "retain_source_image") as retain,
+          mock.patch.object(clearread, "emit"),
+        ):
+          self.assert_error_code(
+            "capture_too_large",
+            lambda: clearread.capture("window", "/omarchy", "eng"),
+          )
+
+        recognize.assert_not_called()
+        retain.assert_not_called()
+
   def test_source_lens_size_limits_precede_memfd_creation(self):
     for image in (png_image(7681, 4320), png_image(32769, 1), png_image(1, 32769)):
       with self.subTest(dimensions=clearread.png_dimensions(image)):
@@ -1590,15 +1639,16 @@ class ClearReadTests(unittest.TestCase):
       import subprocess
       import sys
 
-      subprocess.Popen(
+      child = subprocess.Popen(
         [
           sys.executable, "-c",
           "import os,time; from pathlib import Path; "
-          "Path(os.environ['FAKE_GRANDCHILD_PID']).write_text(str(os.getpid()), encoding='ascii'); "
           "time.sleep(1); Path(os.environ['FAKE_SURVIVOR']).write_text('orphan'); time.sleep(10)",
         ],
         preexec_fn=lambda: signal.signal(signal.SIGTERM, signal.SIG_IGN),
       )
+      from pathlib import Path
+      Path(os.environ["FAKE_GRANDCHILD_PID"]).write_text(str(child.pid), encoding="ascii")
     """)
     environment = self.environment()
     environment.update({
@@ -1610,7 +1660,7 @@ class ClearReadTests(unittest.TestCase):
       with self.assertRaises(clearread.CommandTimeout):
         clearread.run_owned(["leader-exits"], timeout=0.3)
 
-    self.assertTrue(grandchild_pid.exists(), "grandchild did not start before timeout")
+    self.assertTrue(grandchild_pid.exists(), "leader did not record its spawned grandchild")
     self.assert_pid_stopped(int(grandchild_pid.read_text(encoding="ascii")))
     time.sleep(0.4)
     self.assertFalse(survivor.exists(), "pipe-inheriting grandchild escaped its owned PGID")

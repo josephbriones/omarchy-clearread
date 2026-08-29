@@ -29,17 +29,20 @@ English is the default:
 tesseract --list-langs
 ```
 
-Set the same language expression accepted by Tesseract before launching the
-Omarchy shell, for example:
+Before launching the Omarchy shell, set one or more lowercase Tesseract
+language codes made only of ASCII letters, digits, and underscores. Join codes
+with `+`; the complete value may be at most 120 characters. For example:
 
 ```bash
 export OMARCHY_OCR_LANGS=eng+spa
 ```
 
-ClearRead validates the expression but does not install or download language
-data. If Tesseract reports a missing language, add the matching Arch language
-data package through your normal, reviewed system-maintenance workflow and run
-the doctor again.
+ClearRead intentionally accepts this narrow identifier grammar, not every
+expression Tesseract itself may accept; path-like identifiers such as
+`script/Latin` are unsupported. It does not install or download language data.
+If Tesseract reports a missing language, add the matching Arch language data
+package through your normal, reviewed system-maintenance workflow and run the
+doctor again.
 
 ## Optional shortcut
 

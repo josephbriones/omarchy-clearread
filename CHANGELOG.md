@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Align major reader dimensions and control targets with Omarchy's shared `Style` tokens, and wrap header actions when space is constrained.
+- Reject decoded images above the existing source-lens limits before starting
+  Tesseract, with a stable prompt to choose a smaller capture.
+- Show a truthful, accessible plain-text progress state while clipboard text
+  is read without screen capture or OCR.
+- Document the exact supported OCR language-code grammar and refresh the v0.2
+  product preview.
+
 ## 0.2.0 — 2026-08-20
 
 - Add one-action 100%, 200%, 300%, and 400% reflow magnification.
