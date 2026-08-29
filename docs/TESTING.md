@@ -14,8 +14,17 @@ output bounds, JSON protocol, copy input, child cleanup, and the absence of
 plugin-created capture artifacts. It also validates PNG headers, descriptor
 bounds, source omission for clipboard text, and rejection of over-limit
 decoded images before Tesseract is called. Exact dimension and pixel
-boundaries remain accepted. On Linux, the suite additionally validates
-anonymous-memory sealing, exact source bytes,
+boundaries remain accepted. Settings tests exercise the executable launcher
+and manifest identity, exact-schema round trips, private directory and file
+modes, descriptor-relative atomic replacement and rollback, serialized QML
+saves, and fail-closed handling for symlinked directories and files, FIFOs,
+symlinked configuration ancestors, wrong types and owners, hard links,
+non-private modes, and oversized files. It also verifies descriptor-relative
+creation when the configured home does not exist.
+
+The oversized-file test proves no read occurs after the producer-side size
+check, and the FIFO test has an explicit no-hang deadline. On Linux, the suite
+additionally validates anonymous-memory sealing, exact source bytes,
 release/EOF/cancel cleanup, and file-descriptor counts. It also SIGKILLs the
 QML-facing launcher during selection, after the frozen frame has been handed
 to `grim`, and during Tesseract recognition, then proves the worker and owned

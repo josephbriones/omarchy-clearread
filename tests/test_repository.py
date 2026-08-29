@@ -36,6 +36,7 @@ class RepositoryTests(unittest.TestCase):
             "ClearReadModel.js",
             "bin/clearread",
             "lib/clearread.py",
+            "lib/clearread_settings.py",
         ]
         for relative in required:
             self.assertTrue((ROOT / relative).is_file(), relative)
@@ -197,7 +198,70 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(qml.count("Accessible.role: Accessible.RadioButton"), 10)
         self.assertEqual(qml.count("Accessible.onToggleAction: clicked()"), 10)
         self.assertIn("String(Quickshell.processId)", qml)
-        self.assertEqual(qml.count('"--shell-pid", root.shellProcessId'), 3)
+        self.assertEqual(qml.count('"--shell-pid", root.shellProcessId'), 5)
+
+    def test_settings_use_supervised_bounded_helper_and_serialize_saves(self):
+        qml = (ROOT / "ClearRead.qml").read_text(encoding="utf-8")
+        helper = (ROOT / "lib/clearread_settings.py").read_text(encoding="utf-8")
+        worker = (ROOT / "lib/clearread.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("FileView {", qml)
+        self.assertNotIn('command: ["mkdir"', qml)
+        self.assertIn(
+            'command: [root.backendPath, "--shell-pid", root.shellProcessId, "settings-read"]',
+            qml,
+        )
+        self.assertIn(
+            'command: [root.backendPath, "--shell-pid", root.shellProcessId, "settings-write"]',
+            qml,
+        )
+        load_start = qml.index("function startSettingsLoad()")
+        load_end = qml.index("function loadSettings", load_start)
+        load = qml[load_start:load_end]
+        self.assertIn('sourceDir === ""', load)
+        self.assertIn("settingsComponentReady", load)
+        self.assertIn("onSourceDirChanged: Qt.callLater", qml)
+        busy_start = qml.index("function processesBusy()")
+        busy_end = qml.index("function processesRunning()", busy_start)
+        self.assertIn("!settingsLoaded", qml[busy_start:busy_end])
+        settings_load_process = qml[
+            qml.index("id: settingsLoadProcess") : qml.index("id: settingsSaveProcess")
+        ]
+        self.assertIn("stdout: StdioCollector {", settings_load_process)
+        self.assertIn("waitForEnd: true", settings_load_process)
+        self.assertIn("var payload = settingsLoadOutput.text", settings_load_process)
+        self.assertIn("payload.length > 4097", settings_load_process)
+        self.assertGreaterEqual(settings_load_process.count("root.resumePendingOpen()"), 2)
+        flush_start = qml.index("function flushSettings()")
+        flush_end = qml.index("function applySetting", flush_start)
+        flush = qml[flush_start:flush_end]
+        self.assertIn("settingsSaveProcess.running", flush)
+        self.assertIn("settingsSaveStartPending", flush)
+        self.assertLess(flush.index("settingsSavePayload ="), flush.index("settingsDirty = false"))
+        save_start = qml.index("id: settingsSaveProcess")
+        save_end = qml.index("id: doctorProcess", save_start)
+        save = qml[save_start:save_end]
+        self.assertIn("root.settingsDirty = true", save)
+        self.assertIn("if (root.settingsDirty) settingsSaveTimer.restart()", save)
+
+        for contract in (
+            '"O_NOFOLLOW"',
+            '"O_NONBLOCK"',
+            "MAX_SETTINGS_BYTES = 4096",
+            "MAX_CONFIG_PATH_BYTES = 4096",
+            "os.open(os.sep, directory_flags)",
+            "for component in components:",
+            "stat.S_ISREG",
+            "file_stat.st_uid != os.geteuid()",
+            "file_stat.st_nlink != 1",
+            "os.replace(",
+            "src_dir_fd=directory_fd",
+            "dst_dir_fd=directory_fd",
+            "_sync_directory(directory_fd)",
+        ):
+            self.assertIn(contract, helper)
+        self.assertIn('commands.add_parser("settings-read"', worker)
+        self.assertIn('commands.add_parser("settings-write"', worker)
 
     def test_header_and_major_dimensions_follow_omarchy_scaling(self):
         qml = (ROOT / "ClearRead.qml").read_text(encoding="utf-8")

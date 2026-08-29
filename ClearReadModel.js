@@ -235,7 +235,7 @@ function fontSizeForMagnification(value) {
 }
 
 function settingsJson(settings) {
-  return JSON.stringify(normalizeSettings(settings), null, 2) + "\n"
+  return JSON.stringify(normalizeSettings(settings)) + "\n"
 }
 
 function fontFamilyName(value, systemFamily) {

@@ -55,7 +55,10 @@ ClearRead retains only presentation preferences:
 
 They are stored in a plugin-owned settings directory under
 `$XDG_CONFIG_HOME`, or `~/.config` when that variable is unset. The settings
-file contains no screen image, clipboard payload, or recognized text.
+directory is required to be user-owned with mode 0700; saves atomically place
+a user-owned 0600 regular file after bounded schema validation. Unsafe or
+oversized settings are ignored rather than followed. The settings file
+contains no screen image, clipboard payload, or recognized text.
 
 ## No hidden services
 
@@ -63,7 +66,8 @@ ClearRead has no capture daemon, autostart capture, account, analytics,
 telemetry, remote API, or background clipboard watcher. `keepLoaded` keeps
 only the lightweight QML owner resident so it can complete child cleanup after
 the visible overlay closes. The supervised launcher and worker exist only for
-an explicit setup check, capture, source-image hold, or copy action and then
+a bounded settings read/write, explicit setup check, capture, source-image
+hold, or copy action and then
 exit. A source holder is never detached and ends when the image is released.
 The ordinary clipboard provider described above is the sole detached
 post-action lifetime.

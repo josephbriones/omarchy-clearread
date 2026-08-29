@@ -105,9 +105,12 @@ test("all supported presentation choices survive a settings round trip", () => {
     palette: "contrast",
     focusLines: 5
   }
-  const parsed = JSON.parse(model.settingsJson(wanted))
+  const serialized = model.settingsJson(wanted)
+  const parsed = JSON.parse(serialized)
   assert.deepEqual(parsed, { version: 1, ...wanted })
-  assert.equal(model.settingsJson(wanted).endsWith("\n"), true)
+  assert.equal(serialized.endsWith("\n"), true)
+  assert.equal(serialized.slice(0, -1).includes("\n"), false)
+  assert.ok(Buffer.byteLength(serialized, "utf8") <= 4096)
 })
 
 test("font and column helpers resolve deterministic local values", () => {

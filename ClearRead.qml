@@ -68,10 +68,14 @@ Item {
   property string columnWidth: "medium"
   property string paletteName: "paper"
   property int focusLines: 0
+  property bool settingsComponentReady: false
   property bool settingsLoaded: false
   property bool settingsHydrating: false
-  property bool settingsDirectoryReady: false
-  property bool settingsDirectoryStartPending: false
+  property bool settingsLoadStartPending: false
+  property string settingsLoadDiagnostic: ""
+  property bool settingsSaveStartPending: false
+  property string settingsSavePayload: ""
+  property string settingsSaveDiagnostic: ""
   property bool settingsDirty: false
 
   // Every control meets the 44-by-44 logical-pixel target without replacing
@@ -88,13 +92,6 @@ Item {
   readonly property string sourceDir: manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
   readonly property string backendPath: sourceDir + "/bin/clearread"
   readonly property string shellProcessId: String(Quickshell.processId)
-  readonly property string configHome: Quickshell.env("XDG_CONFIG_HOME") !== ""
-    ? Quickshell.env("XDG_CONFIG_HOME")
-    : (Quickshell.env("HOME") !== "" ? Quickshell.env("HOME") + "/.config" : "")
-  readonly property string settingsDirectory: configHome === ""
-    ? ""
-    : configHome + "/io.github.josephbriones.clearread"
-  readonly property string settingsPath: settingsDirectory === "" ? "" : settingsDirectory + "/settings.json"
   readonly property bool readerVisible: phase === "reading" && documentText !== ""
   readonly property bool clipboardCaptureActive: phase === "capturing" && activeMode === "clipboard"
   readonly property bool sourceAvailable: sourceHeld && !demoMode
@@ -139,12 +136,12 @@ Item {
 
   function processesBusy() {
     return doctorProcess.running || (captureProcess.running && !sourceHeld) || copyProcess.running
-      || doctorExpectedStop || captureExpectedStop || copyExpectedStop
+      || doctorExpectedStop || captureExpectedStop || copyExpectedStop || !settingsLoaded
   }
 
   function processesRunning() {
     return doctorProcess.running || captureProcess.running || copyProcess.running
-      || settingsDirectoryProcess.running
+      || settingsLoadProcess.running || settingsSaveProcess.running
   }
 
   function discardSource() {
@@ -573,6 +570,14 @@ Item {
     }
   }
 
+  function startSettingsLoad() {
+    if (!settingsComponentReady || settingsLoaded || sourceDir === ""
+        || settingsLoadProcess.running || settingsLoadStartPending) return
+    settingsLoadDiagnostic = ""
+    settingsLoadStartPending = true
+    settingsLoadProcess.running = true
+  }
+
   function loadSettings(raw) {
     if (settingsLoaded) return
     var settings = ClearReadModel.normalizeSettings(raw)
@@ -591,22 +596,19 @@ Item {
   }
 
   function scheduleSettingsSave() {
-    if (!settingsLoaded || settingsHydrating || settingsPath === "") return
+    if (!settingsLoaded || settingsHydrating) return
     settingsDirty = true
-    if (!settingsDirectoryReady) {
-      if (!settingsDirectoryProcess.running && !settingsDirectoryStartPending) {
-        settingsDirectoryStartPending = true
-        settingsDirectoryProcess.running = true
-      }
-      return
-    }
     settingsSaveTimer.restart()
   }
 
   function flushSettings() {
-    if (!settingsDirty || !settingsDirectoryReady || settingsPath === "") return
+    if (!settingsDirty || !settingsLoaded || settingsSaveProcess.running
+        || settingsSaveStartPending) return
+    settingsSavePayload = ClearReadModel.settingsJson(presentationSettings())
+    settingsSaveDiagnostic = ""
     settingsDirty = false
-    settingsFile.setText(ClearReadModel.settingsJson(presentationSettings()))
+    settingsSaveStartPending = true
+    settingsSaveProcess.running = true
   }
 
   function applySetting(group, value) {
@@ -654,6 +656,7 @@ Item {
   onColumnWidthChanged: scheduleSettingsSave()
   onPaletteNameChanged: scheduleSettingsSave()
   onFocusLinesChanged: scheduleSettingsSave()
+  onSourceDirChanged: Qt.callLater(function() { root.startSettingsLoad() })
 
   Timer {
     id: captureDelay
@@ -694,37 +697,71 @@ Item {
     font: documentBody.font
   }
 
-  FileView {
-    id: settingsFile
-    path: root.settingsPath
-    watchChanges: false
-    atomicWrites: true
-    printErrors: false
-    onLoaded: {
-      root.settingsDirectoryReady = true
-      root.loadSettings(text())
+  Process {
+    id: settingsLoadProcess
+    command: [root.backendPath, "--shell-pid", root.shellProcessId, "settings-read"]
+    stdout: StdioCollector {
+      id: settingsLoadOutput
+      waitForEnd: true
     }
-    onLoadFailed: root.loadSettings("")
+    stderr: SplitParser {
+      onRead: function(line) {
+        root.settingsLoadDiagnostic = ClearReadModel.cleanLine(line, 600)
+      }
+    }
+    onStarted: root.settingsLoadStartPending = false
+    onRunningChanged: {
+      if (running || !root.settingsLoadStartPending) return
+      root.settingsLoadStartPending = false
+      root.loadSettings("")
+      console.warn("clearread: could not start the settings helper")
+      Qt.callLater(function() { root.resumePendingOpen() })
+    }
+    onExited: function(exitCode) {
+      root.settingsLoadStartPending = false
+      var payload = settingsLoadOutput.text
+      if (root.settingsLoaded) return
+      if (exitCode !== 0 || payload === "" || payload.length > 4097) {
+        console.warn("clearread: " + ClearReadModel.safeProcessError(
+          root.settingsLoadDiagnostic, exitCode, "Could not load presentation settings safely."))
+        root.loadSettings("")
+        Qt.callLater(function() { root.resumePendingOpen() })
+        return
+      }
+      root.loadSettings(payload)
+      Qt.callLater(function() { root.resumePendingOpen() })
+    }
   }
 
   Process {
-    id: settingsDirectoryProcess
-    command: ["mkdir", "-m", "700", "-p", "--", root.settingsDirectory]
-    onStarted: root.settingsDirectoryStartPending = false
+    id: settingsSaveProcess
+    stdinEnabled: true
+    command: [root.backendPath, "--shell-pid", root.shellProcessId, "settings-write"]
+    stderr: SplitParser {
+      onRead: function(line) {
+        root.settingsSaveDiagnostic = ClearReadModel.cleanLine(line, 600)
+      }
+    }
+    onStarted: {
+      root.settingsSaveStartPending = false
+      write(root.settingsSavePayload)
+    }
     onRunningChanged: {
-      if (running || !root.settingsDirectoryStartPending) return
-      root.settingsDirectoryStartPending = false
-      root.settingsDirty = false
-      console.warn("clearread: could not start settings directory creation")
+      if (running || !root.settingsSaveStartPending) return
+      root.settingsSaveStartPending = false
+      root.settingsSavePayload = ""
+      root.settingsDirty = true
+      console.warn("clearread: could not start the settings helper")
     }
     onExited: function(exitCode) {
-      root.settingsDirectoryStartPending = false
+      root.settingsSaveStartPending = false
+      root.settingsSavePayload = ""
       if (exitCode !== 0) {
-        root.settingsDirty = false
-        console.warn("clearread: could not create private settings directory")
+        root.settingsDirty = true
+        console.warn("clearread: " + ClearReadModel.safeProcessError(
+          root.settingsSaveDiagnostic, exitCode, "Could not save presentation settings safely."))
         return
       }
-      root.settingsDirectoryReady = true
       if (root.settingsDirty) settingsSaveTimer.restart()
     }
   }
@@ -2071,5 +2108,8 @@ Item {
     }
   }
 
-  Component.onCompleted: settingsFile.reload()
+  Component.onCompleted: {
+    settingsComponentReady = true
+    startSettingsLoad()
+  }
 }

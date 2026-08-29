@@ -18,6 +18,13 @@ import time
 import unicodedata
 import zlib
 
+from clearread_settings import (
+  MAX_SETTINGS_BYTES,
+  SettingsStoreError,
+  load_settings,
+  save_settings,
+)
+
 
 MAX_COMMAND_OUTPUT = 1024 * 1024
 MAX_ERROR_OUTPUT = 64 * 1024
@@ -1031,11 +1038,11 @@ def capture(mode, omarchy_path, language):
       source.close()
 
 
-def read_copy_request(stream):
+def read_bounded_request(stream, maximum_bytes, error_code, error_message):
   try:
     descriptor = stream.fileno()
   except (AttributeError, OSError):
-    return stream.readline(MAX_COPY_INPUT_BYTES + 1)
+    return stream.readline(maximum_bytes + 1)
 
   data = bytearray()
   deadline = time.monotonic() + COMMAND_TIMEOUT
@@ -1045,25 +1052,30 @@ def read_copy_request(stream):
 
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-      raise ClearReadError("invalid_copy_request", "ClearRead did not receive text to copy.")
+      raise ClearReadError(error_code, error_message)
     ready, _, _ = select.select([descriptor], [], [], min(0.1, remaining))
     if not ready:
       continue
 
-    chunk = os.read(descriptor, min(64 * 1024, MAX_COPY_INPUT_BYTES - len(data) + 1))
+    chunk = os.read(descriptor, min(64 * 1024, maximum_bytes - len(data) + 1))
     if not chunk:
       return bytes(data)
 
     newline = chunk.find(b"\n")
     data.extend(chunk if newline == -1 else chunk[:newline + 1])
-    if len(data) > MAX_COPY_INPUT_BYTES:
+    if len(data) > maximum_bytes:
       return bytes(data)
     if newline != -1:
       return bytes(data)
 
 
 def copy_text():
-  line = read_copy_request(sys.stdin.buffer)
+  line = read_bounded_request(
+    sys.stdin.buffer,
+    MAX_COPY_INPUT_BYTES,
+    "invalid_copy_request",
+    "ClearRead did not receive text to copy.",
+  )
   if len(line) > MAX_COPY_INPUT_BYTES:
     raise ClearReadError("copy_too_large", "The text is too large to copy safely.")
   if not line:
@@ -1094,6 +1106,32 @@ def copy_text():
 
   if return_code != 0:
     raise ClearReadError("copy_failed", "ClearRead could not copy the text.")
+
+
+def read_presentation_settings():
+  try:
+    content = load_settings()
+  except SettingsStoreError as error:
+    raise ClearReadError("settings_read_failed", str(error)) from error
+  sys.stdout.buffer.write(content + b"\n")
+  sys.stdout.buffer.flush()
+
+
+def write_presentation_settings():
+  line = read_bounded_request(
+    sys.stdin.buffer,
+    MAX_SETTINGS_BYTES,
+    "invalid_settings_request",
+    "ClearRead did not receive presentation settings.",
+  )
+  if len(line) > MAX_SETTINGS_BYTES:
+    raise ClearReadError("settings_too_large", "ClearRead settings exceed the 4096-byte limit.")
+  if not line:
+    raise ClearReadError("invalid_settings_request", "ClearRead did not receive presentation settings.")
+  try:
+    save_settings(line)
+  except SettingsStoreError as error:
+    raise ClearReadError("settings_write_failed", str(error)) from error
 
 
 def doctor(omarchy_path, language):
@@ -1205,6 +1243,8 @@ def parser():
   capture_parser.add_argument("--request-id", type=request_id)
 
   commands.add_parser("copy", help="copy one JSON text request")
+  commands.add_parser("settings-read", help="read bounded presentation settings")
+  commands.add_parser("settings-write", help="write bounded presentation settings")
   return argument_parser
 
 
@@ -1234,12 +1274,21 @@ def main(argv=None):
     if arguments.command == "copy":
       copy_text()
       return 0
+    if arguments.command == "settings-read":
+      read_presentation_settings()
+      return 0
+    if arguments.command == "settings-write":
+      write_presentation_settings()
+      return 0
   except Cancelled:
     mode = getattr(arguments, "mode", None)
     emit("cancelled", mode=mode)
     return 130
   except ClearReadError as error:
-    emit("error", code=error.code, message=error.message)
+    if arguments.command.startswith("settings-"):
+      sys.stderr.write(error.message + "\n")
+    else:
+      emit("error", code=error.code, message=error.message)
     return 1
   finally:
     CHILDREN.cancel()
